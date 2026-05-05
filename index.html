@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>HACCP & Rintracciabilità</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+  <!-- jsPDF per esportazione -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+  <!-- QRCode.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+
+<div id="app">
+  <header>
+    <img src="logo.png" alt="Logo" style="height: 40px; width: auto; object-fit: contain;">
+    <h1 id="page-title">Dashboard</h1>
+  </header>
+
+  <main id="main-content">
+    <div style="text-align: center; padding: 50px 20px; color: var(--text-secondary);">
+      <i class="ph ph-circle-notch ph-spin" style="font-size: 40px; margin-bottom: 15px;"></i>
+      <p>Caricamento applicazione in corso...</p>
+      <p style="font-size: 12px; margin-top: 20px; color: var(--danger-color);">Se questa schermata rimane fissa per più di 5 secondi, prova a premere <strong>CTRL + F5</strong> o apri il file <code>index.html</code> direttamente dalla cartella.</p>
+    </div>
+  </main>
+
+  <nav class="bottom-nav">
+    <a href="#" class="nav-item active" data-view="dashboard">
+      <i class="ph ph-squares-four"></i>
+      <span>Home</span>
+    </a>
+    <a href="#" class="nav-item" data-view="haccp">
+      <i class="ph ph-shield-check"></i>
+      <span>HACCP</span>
+    </a>
+    <a href="#" class="nav-item" data-view="traceability">
+      <i class="ph ph-package"></i>
+      <span>Traccia</span>
+    </a>
+    <a href="#" class="nav-item" data-view="reports">
+      <i class="ph ph-file-text"></i>
+      <span>Report</span>
+    </a>
+    <a href="#" class="nav-item" data-view="settings">
+      <i class="ph ph-gear"></i>
+      <span>Impost.</span>
+    </a>
+  </nav>
+
+  <!-- Global Modal for Forms -->
+  <div id="global-modal" class="modal-overlay">
+    <div class="modal-content">
+      <h2 id="modal-title">Nuovo Inserimento</h2>
+      <div id="modal-body"></div>
+      <div style="display: flex; gap: 10px; margin-top: 20px;">
+        <button class="btn-secondary" onclick="closeModal()">Annulla</button>
+        <button class="btn-primary" id="modal-save-btn">Salva</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  window.addEventListener('error', function(e) {
+    if (e.target.tagName === 'SCRIPT') {
+      console.error('ERRORE CARICAMENTO SCRIPT:', e.target.src);
+      document.body.innerHTML += `<div style="position:fixed; top:0; left:0; right:0; background:red; color:white; padding:10px; z-index:10000; text-align:center;">
+        Errore nel caricamento del file: ${e.target.src.split('/').pop()}. Verifica che il file esista nella cartella.
+      </div>`;
+    }
+  }, true);
+</script>
+<script src="store.js?v=4"></script>
+<script src="app_v4.js"></script>
+</body>
+</html>
