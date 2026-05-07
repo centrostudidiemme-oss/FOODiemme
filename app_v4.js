@@ -879,7 +879,7 @@ const App = {
           </div>
           
           <h4 style="margin-bottom: 10px;">Rilievi dal ${App.formatDate(fromDate)} al ${App.formatDate(toDate)}</h4>
-          <div class="list-container" style="max-height: 400px; overflow-y: auto;">
+          <div class="list-container">
             ${filteredRecords.length > 0 ? filteredRecords.map(r => `
               <div class="list-item" style="padding: 12px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; background: white; margin-bottom: 5px; border-radius: 8px;">
                 <div style="flex: 1;">
@@ -2050,7 +2050,7 @@ const App = {
                <input type="text" id="new-equipment" placeholder="Nuova attrezzatura..." class="input-lg" style="flex:1;">
                <button class="btn-secondary btn-sm-plus" onclick="App.addSettingItem('equipments', 'new-equipment', 'settings_equipments')"><i class="ph ph-plus"></i></button>
             </div>
-            <div class="list-container" style="max-height: 400px; overflow-y: auto;">
+            <div class="list-container">
               ${equipments.map(e => `
                 <div class="list-item" style="padding: 10px 0; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
                   <div class="item-title">${e.name}</div>
@@ -2078,7 +2078,7 @@ const App = {
                <input type="text" id="new-environment" placeholder="Nuovo ambiente..." class="input-lg" style="flex:1;">
                <button class="btn-secondary btn-sm-plus" onclick="App.addSettingItem('work_environments', 'new-environment', 'settings_environments')"><i class="ph ph-plus"></i></button>
             </div>
-            <div class="list-container" style="max-height: 400px; overflow-y: auto;">
+            <div class="list-container">
               ${environments.map(e => `
                 <div class="list-item" style="padding: 10px 0; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
                   <div class="item-title">${e.name}</div>
@@ -2106,7 +2106,7 @@ const App = {
                <input type="text" id="new-detergent" placeholder="Nuovo detergente..." class="input-lg" style="flex:1;">
                <button class="btn-secondary btn-sm-plus" onclick="App.addSettingItem('detergents', 'new-detergent', 'settings_detergents')"><i class="ph ph-plus"></i></button>
             </div>
-            <div class="list-container" style="max-height: 400px; overflow-y: auto;">
+            <div class="list-container">
               ${detergents.map(d => `
                 <div class="list-item" style="padding: 10px 0; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
                   <div class="item-title">${d.name}</div>
@@ -2133,7 +2133,7 @@ const App = {
              <button class="btn-primary" onclick="App.openModal('worker')"><i class="ph ph-plus"></i> Nuovo Lavoratore</button>
           </div>
           
-          <div class="list-container" style="max-height: 400px; overflow-y: auto;">
+          <div class="list-container">
             ${workers.length > 0 ? workers.map(w => `
               <div class="list-item" style="padding: 10px 0; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center;">
                 <div>
@@ -2581,7 +2581,7 @@ const App = {
         </div>
 
         <h4 style="margin-bottom: 10px; font-size: 13px; color: var(--text-secondary);">Ingredienti in Ricetta:</h4>
-        <div id="recipe-ingredients-list" style="max-height: 200px; overflow-y: auto; background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 5px;">
+        <div id="recipe-ingredients-list" style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 5px;">
            <p style="text-align: center; padding: 20px; color: var(--text-secondary); font-style: italic; font-size: 13px;">Nessun ingrediente ancora aggiunto.</p>
         </div>
       `;
@@ -2625,7 +2625,7 @@ const App = {
         </div>
 
         <h4 style="margin-top: 20px; margin-bottom: 10px; font-size: 13px; color: var(--text-secondary);">Ingredienti Forniti</h4>
-        <div style="background: rgba(0,0,0,0.02); padding: 10px; border-radius: 8px; max-height: 150px; overflow-y: auto;">
+        <div style="background: rgba(0,0,0,0.02); padding: 10px; border-radius: 8px;">
           ${(Store.data.ingredients || []).map(i => `
             <div class="checkbox-group" style="margin-bottom: 5px;">
               <input type="checkbox" class="sup-ing-check" value="${i.id}" id="sup-ing-${i.id}" />
@@ -2676,7 +2676,7 @@ const App = {
         </div>
 
         <h4 style="margin-top: 20px; margin-bottom: 10px; font-size: 13px; color: var(--text-secondary);">Ingredienti Forniti</h4>
-        <div style="background: rgba(0,0,0,0.02); padding: 10px; border-radius: 8px; max-height: 150px; overflow-y: auto;">
+        <div style="background: rgba(0,0,0,0.02); padding: 10px; border-radius: 8px;">
           ${(Store.data.ingredients || []).map(i => `
             <div class="checkbox-group" style="margin-bottom: 5px;">
               <input type="checkbox" class="edit-sup-ing-check" value="${i.id}" id="edit-sup-ing-${i.id}" ${(s.providedIngredients || []).includes(i.id) ? 'checked' : ''} />
@@ -2770,7 +2770,7 @@ const App = {
           </div>
         </div>
 
-        <div id="recipe-ingredients-list" style="max-height: 150px; overflow-y: auto; background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 5px; margin-bottom: 20px;"></div>
+        <div id="recipe-ingredients-list" style="background: white; border: 1px solid var(--border-color); border-radius: 8px; padding: 5px; margin-bottom: 20px;"></div>
 
         <div class="form-group">
           <label>Peso Totale Ricetta (kg)</label>
@@ -2833,7 +2833,7 @@ const App = {
         </div>
         
         <h4 style="margin-bottom: 10px;">Allergeni Presenti</h4>
-        <div style="background: rgba(0,0,0,0.02); padding: 10px; border-radius: 8px; max-height: 200px; overflow-y: auto;">
+        <div style="background: rgba(0,0,0,0.02); padding: 10px; border-radius: 8px;">
           ${allergenList.map(a => `
             <div class="checkbox-group" style="margin-bottom: 5px;">
               <input type="checkbox" class="allergen-check" value="${a}" id="all-${a}" />
@@ -2891,7 +2891,7 @@ const App = {
         </div>
         
         <h4 style="margin-bottom: 10px;">Allergeni Presenti</h4>
-        <div style="background: rgba(0,0,0,0.02); padding: 10px; border-radius: 8px; max-height: 200px; overflow-y: auto;">
+        <div style="background: rgba(0,0,0,0.02); padding: 10px; border-radius: 8px;">
           ${allergenList.map(a => `
             <div class="checkbox-group" style="margin-bottom: 5px;">
               <input type="checkbox" class="edit-allergen-check" value="${a}" id="edit-all-${a}" ${(ing.allergens || []).includes(a) ? 'checked' : ''} />
@@ -3293,7 +3293,7 @@ const App = {
         </div>
 
         <h4 style="margin-top: 16px; margin-bottom: 8px;">Attrezzature</h4>
-        <div style="max-height: 150px; overflow-y: auto; background: rgba(0,0,0,0.02); padding: 8px; border-radius: 8px;">
+        <div style="background: rgba(0,0,0,0.02); padding: 8px; border-radius: 8px;">
           ${equipments.length === 0 ? '<p style="font-size:13px;">Nessuna attrezzatura.</p>' : equipments.map(e => {
             const found = rec.equipmentCleaned?.find(x => x.id === e.id);
             const currentDets = found ? (Array.isArray(found.detergentId) ? found.detergentId : [found.detergentId]) : [];
@@ -3310,7 +3310,7 @@ const App = {
         </div>
 
         <h4 style="margin-top: 16px; margin-bottom: 8px;">Ambienti di Lavoro</h4>
-        <div style="max-height: 150px; overflow-y: auto; background: rgba(0,0,0,0.02); padding: 8px; border-radius: 8px;">
+        <div style="background: rgba(0,0,0,0.02); padding: 8px; border-radius: 8px;">
           ${environments.length === 0 ? '<p style="font-size:13px;">Nessun ambiente.</p>' : environments.map(e => {
             const found = rec.environmentsCleaned?.find(x => x.id === e.id);
             const currentDets = found ? (Array.isArray(found.detergentId) ? found.detergentId : [found.detergentId]) : [];
@@ -3389,7 +3389,7 @@ const App = {
         </div>
 
         <h4 style="margin-top: 16px; margin-bottom: 8px;">Attrezzature</h4>
-        <div style="max-height: 150px; overflow-y: auto; background: rgba(0,0,0,0.02); padding: 8px; border-radius: 8px;">
+        <div style="background: rgba(0,0,0,0.02); padding: 8px; border-radius: 8px;">
           ${equipments.length === 0 ? '<p style="font-size:13px;">Nessuna attrezzatura in impostazioni.</p>' : equipments.map(e => {
             let lastDet = '';
             if (lastRecord && lastRecord.equipmentCleaned) {
@@ -3411,7 +3411,7 @@ const App = {
         </div>
 
         <h4 style="margin-top: 16px; margin-bottom: 8px;">Ambienti di Lavoro</h4>
-        <div style="max-height: 150px; overflow-y: auto; background: rgba(0,0,0,0.02); padding: 8px; border-radius: 8px;">
+        <div style="background: rgba(0,0,0,0.02); padding: 8px; border-radius: 8px;">
           ${environments.length === 0 ? '<p style="font-size:13px;">Nessun ambiente in impostazioni.</p>' : environments.map(e => {
             let lastDet = '';
             if (lastRecord && lastRecord.environmentsCleaned) {

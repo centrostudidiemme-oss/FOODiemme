@@ -37,13 +37,19 @@
   padding: 0;
 }
 
+html {
+  height: 100%;
+}
+
 body {
   font-family: var(--font-family);
   background: var(--bg-gradient);
   background-attachment: fixed;
   color: var(--text-main);
   -webkit-font-smoothing: antialiased;
-  padding-bottom: 90px;
+  padding-bottom: 120px; /* Increased padding to ensure content is not hidden by nav */
+  min-height: 100vh;
+  overflow-x: hidden;
 }
 
 /* Typography */
@@ -317,16 +323,21 @@ button:active { transform: scale(0.96); }
   z-index: 200;
   backdrop-filter: blur(5px);
   -webkit-backdrop-filter: blur(5px);
+  overflow-y: auto; /* Allow overlay to scroll if needed */
+  -webkit-overflow-scrolling: touch;
 }
 .modal-overlay.active { display: flex; animation: fadeInModal 0.3s; }
 .modal-content {
   background: var(--surface-solid);
   width: 100%;
   max-width: 600px;
+  max-height: 92vh; /* Ensure it doesn't cover the whole screen and allows scrolling */
+  overflow-y: auto; /* Enable internal scrolling */
   border-radius: 24px 24px 0 0;
-  padding: 30px 20px;
+  padding: 30px 20px 100px; /* Extra bottom padding for mobile keyboard/scrolling */
   box-shadow: var(--shadow-lg);
   animation: slideUpModal 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
 }
 
 @keyframes fadeInModal {
