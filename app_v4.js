@@ -85,6 +85,9 @@ const App = {
   },
 
   renderView(view) {
+    // Always release the QR camera when navigating away
+    this.stopQRScanner();
+
     this.currentView = view;
     const main = document.getElementById('main-content');
     const title = document.getElementById('page-title');
@@ -238,6 +241,11 @@ const App = {
         title.innerText = 'Archivio Documenti';
         main.innerHTML = this.views.trace_archive();
         break;
+      case 'trace_scan':
+        title.innerText = 'Scanner QR';
+        main.innerHTML = this.views.trace_scan();
+        this.initQRScanner();
+        break;
       case 'haccp_structure_detail':
         title.innerText = 'Dettaglio Controllo';
         main.innerHTML = this.views.haccp_structure_detail(this.currentRecordId);
@@ -311,6 +319,145 @@ const App = {
   goToProductionDetail(id) {
     this.currentRecordId = id;
     this.renderView('trace_production_detail');
+  },
+
+  goToScan() {
+    this.renderView('trace_scan');
+  },
+
+  resolveQRCode(url) {
+    try {
+      // Parse URL params from the scanned QR
+      const urlObj = new URL(url);
+      const view = urlObj.searchParams.get('view');
+      const id   = urlObj.searchParams.get('id');
+
+      if (!id) {
+        this.showScanResult('error', 'QR non riconosciuto: parametri mancanti.');
+        return;
+      }
+
+      // Route: incoming goods (carico merce singola)
+      const isIncoming = (Store.data.incoming_goods || []).some(g => g.id === id);
+      if (isIncoming || view === 'trace_incoming_detail') {
+        this.stopQRScanner();
+        this.currentRecordId = id;
+        this.renderView('trace_incoming_detail');
+        this.generateIncomingQRCode(id);
+        return;
+      }
+
+      // Route: production
+      const isProduction = (Store.data.productions || []).some(p => p.id === id);
+      if (isProduction || view === 'trace_production_detail') {
+        this.stopQRScanner();
+        this.currentRecordId = id;
+        this.renderView('trace_production_detail');
+        return;
+      }
+
+      this.showScanResult('error', 'Record non trovato nel sistema. ID: ' + id);
+    } catch (e) {
+      // Not a URL — try raw ID lookup
+      const isIncoming = (Store.data.incoming_goods || []).some(g => g.id === url);
+      if (isIncoming) {
+        this.stopQRScanner();
+        this.currentRecordId = url;
+        this.renderView('trace_incoming_detail');
+        this.generateIncomingQRCode(url);
+        return;
+      }
+      const isProduction = (Store.data.productions || []).some(p => p.id === url);
+      if (isProduction) {
+        this.stopQRScanner();
+        this.currentRecordId = url;
+        this.renderView('trace_production_detail');
+        return;
+      }
+      this.showScanResult('error', 'QR non riconoscibile: ' + url);
+    }
+  },
+
+  showScanResult(type, message) {
+    const el = document.getElementById('scan-result-msg');
+    if (!el) return;
+    el.style.display = 'block';
+    el.style.background = type === 'error' ? '#fff5f5' : '#f0fdf4';
+    el.style.border = type === 'error' ? '1px solid #feb2b2' : '1px solid #bbf7d0';
+    el.style.color = type === 'error' ? '#c53030' : '#166534';
+    el.innerHTML = `<i class="ph ${type === 'error' ? 'ph-warning-circle' : 'ph-check-circle'}"></i> ${message}`;
+  },
+
+  stopQRScanner() {
+    if (this._qrStream) {
+      this._qrStream.getTracks().forEach(t => t.stop());
+      this._qrStream = null;
+    }
+    if (this._qrAnimFrame) {
+      cancelAnimationFrame(this._qrAnimFrame);
+      this._qrAnimFrame = null;
+    }
+  },
+
+  initQRScanner() {
+    // Load jsQR dynamically if not already present
+    const startScan = () => {
+      const video = document.getElementById('qr-video');
+      const canvas = document.getElementById('qr-canvas');
+      const statusEl = document.getElementById('scan-status');
+      const startBtn = document.getElementById('btn-start-scan');
+      if (!video || !canvas) return;
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        this.showScanResult('error', 'La fotocamera non è supportata da questo browser.');
+        return;
+      }
+
+      if (startBtn) startBtn.style.display = 'none';
+      if (statusEl) statusEl.innerText = 'Avvio fotocamera...';
+
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+        .then(stream => {
+          this._qrStream = stream;
+          video.srcObject = stream;
+          video.setAttribute('playsinline', true);
+          video.play();
+          if (statusEl) statusEl.innerText = 'Inquadra il QR Code...';
+
+          const ctx = canvas.getContext('2d');
+          const scan = () => {
+            if (video.readyState === video.HAVE_ENOUGH_DATA) {
+              canvas.height = video.videoHeight;
+              canvas.width  = video.videoWidth;
+              ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+              const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+              const code = window.jsQR ? window.jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' }) : null;
+              if (code && code.data) {
+                if (statusEl) statusEl.innerText = '✅ QR rilevato!';
+                this.resolveQRCode(code.data);
+                return; // stop loop on success
+              }
+            }
+            this._qrAnimFrame = requestAnimationFrame(scan);
+          };
+          this._qrAnimFrame = requestAnimationFrame(scan);
+        })
+        .catch(err => {
+          this.showScanResult('error', 'Accesso fotocamera negato: ' + err.message);
+          if (startBtn) { startBtn.style.display = 'block'; startBtn.innerText = 'Riprova'; }
+          if (statusEl) statusEl.innerText = '';
+        });
+    };
+
+    if (!window.jsQR) {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+      script.onload = startScan;
+      script.onerror = () => this.showScanResult('error', 'Impossibile caricare la libreria di scansione. Verifica la connessione.');
+      document.head.appendChild(script);
+    } else {
+      startScan();
+    }
   },
 
   goToMaintenanceDetail(id) {
@@ -1486,6 +1633,15 @@ const App = {
             <div class="widget-icon" style="background: #a855f7; width: 40px; height: 40px; font-size: 20px;"><i class="ph-fill ph-tag"></i></div>
             <div class="widget-value" style="font-size: 16px; margin-top: 5px;">Etichette</div>
           </div>
+          <div class="widget" onclick="App.renderView('trace_scan')" style="cursor: pointer; padding: 15px; grid-column: span 2; background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%); color: white;">
+            <div style="display: flex; align-items: center; gap: 15px;">
+              <div class="widget-icon" style="background: rgba(255,255,255,0.15); color: white; width: 48px; height: 48px; font-size: 26px;"><i class="ph-fill ph-qr-code"></i></div>
+              <div>
+                <div style="font-size: 18px; font-weight: 800; letter-spacing: -0.5px;">Scanner QR</div>
+                <div style="font-size: 12px; opacity: 0.75; margin-top: 2px;">Scansiona etichette merci e produzioni</div>
+              </div>
+            </div>
+          </div>
         </div>
       `;
     },
@@ -2007,6 +2163,65 @@ const App = {
       `;
     },
 
+    trace_scan() {
+      return `
+        <div class="card">
+          <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.stopQRScanner(); App.renderView('traceability')"><i class="ph ph-arrow-left"></i> Indietro</button>
+          <h3><i class="ph-fill ph-qr-code"></i> Scanner QR Tracciabilità</h3>
+          <p style="margin-bottom: 20px; color: var(--text-secondary);">Inquadra il QR Code di un'etichetta merce o di produzione per accedere istantaneamente alla scheda di tracciabilità.</p>
+
+          <!-- Scan Result Banner -->
+          <div id="scan-result-msg" style="display:none; padding: 12px 16px; border-radius: 10px; margin-bottom: 16px; font-weight: 600; font-size: 14px;"></div>
+
+          <!-- Camera Viewfinder -->
+          <div style="position: relative; width: 100%; max-width: 360px; margin: 0 auto;">
+            <div style="position: relative; border-radius: 16px; overflow: hidden; background: #0f172a; box-shadow: 0 8px 32px rgba(0,0,0,0.3);">
+              <video id="qr-video" style="width: 100%; display: block; aspect-ratio: 1/1; object-fit: cover;" muted playsinline></video>
+              <!-- Scan overlay -->
+              <div style="position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none;">
+                <div style="width: 200px; height: 200px; position: relative;">
+                  <div style="position:absolute; top:0; left:0; width:30px; height:30px; border-top: 3px solid #38bdf8; border-left: 3px solid #38bdf8; border-radius: 4px 0 0 0;"></div>
+                  <div style="position:absolute; top:0; right:0; width:30px; height:30px; border-top: 3px solid #38bdf8; border-right: 3px solid #38bdf8; border-radius: 0 4px 0 0;"></div>
+                  <div style="position:absolute; bottom:0; left:0; width:30px; height:30px; border-bottom: 3px solid #38bdf8; border-left: 3px solid #38bdf8; border-radius: 0 0 0 4px;"></div>
+                  <div style="position:absolute; bottom:0; right:0; width:30px; height:30px; border-bottom: 3px solid #38bdf8; border-right: 3px solid #38bdf8; border-radius: 0 0 4px 0;"></div>
+                  <!-- Scan line animation -->
+                  <div style="position: absolute; left: 8px; right: 8px; height: 2px; background: #38bdf8; box-shadow: 0 0 8px #38bdf8; animation: scan-line 2s linear infinite;"></div>
+                </div>
+              </div>
+            </div>
+            <canvas id="qr-canvas" style="display:none;"></canvas>
+          </div>
+
+          <p id="scan-status" style="text-align: center; margin-top: 14px; font-size: 13px; color: var(--text-secondary); min-height: 20px; font-weight: 500;">In attesa di avvio...</p>
+
+          <div style="margin-top: 20px; display: flex; flex-direction: column; gap: 12px;">
+            <button id="btn-start-scan" class="btn-primary" style="font-size: 16px; padding: 16px; letter-spacing: 0.5px;" onclick="App.initQRScanner()">
+              <i class="ph-fill ph-camera"></i> Avvia Scansione
+            </button>
+            <button class="btn-secondary" onclick="App.stopQRScanner(); document.getElementById('scan-status').innerText='Fotocamera fermata.'; document.getElementById('btn-start-scan').style.display='block';">
+              <i class="ph ph-stop-circle"></i> Ferma Fotocamera
+            </button>
+          </div>
+
+          <div style="margin-top: 24px; padding: 15px; background: rgba(0,0,0,0.02); border-radius: 12px; border: 1px solid var(--border-color);">
+            <h4 style="font-size: 12px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 10px;"><i class="ph ph-info"></i> Come funziona</h4>
+            <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px;">
+              <li style="font-size: 13px; display: flex; align-items: flex-start; gap: 8px;"><i class="ph-fill ph-truck" style="color: var(--primary-color); margin-top: 2px;"></i><span><strong>QR Carico Merce</strong> → apre la scheda del lotto con giacenza, DDT e utilizzi in produzione</span></li>
+              <li style="font-size: 13px; display: flex; align-items: flex-start; gap: 8px;"><i class="ph-fill ph-cooking-pot" style="color: var(--success-color); margin-top: 2px;"></i><span><strong>QR Produzione</strong> → apre la scheda di riepilogo con ingredienti e lotti utilizzati</span></li>
+            </ul>
+          </div>
+        </div>
+
+        <style>
+          @keyframes scan-line {
+            0%   { top: 10px; }
+            50%  { top: calc(100% - 12px); }
+            100% { top: 10px; }
+          }
+        </style>
+      `;
+    },
+
     trace_archive() {
       const shipments = Store.data.trace_shipments || [];
       const sorted = shipments.sort((a,b) => new Date(b.date) - new Date(a.date));
@@ -2049,22 +2264,57 @@ const App = {
         <div class="card">
           <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.renderView('traceability')"><i class="ph ph-arrow-left"></i> Indietro</button>
           <h3><i class="ph-fill ph-tag"></i> Etichette Produzioni</h3>
-          <p>Seleziona una produzione per generare l'etichetta a norma <strong>Reg. UE 1169/2011</strong>.</p>
-          
-          <div class="form-group" style="margin-top: 16px;">
+          <p style="margin-bottom: 20px;">Seleziona la produzione e il tipo di etichetta da stampare.</p>
+
+          <div class="form-group" style="margin-top: 4px;">
             <label><i class="ph ph-cooking-pot"></i> Seleziona Produzione</label>
             <select id="label-production-select">
               <option value="">-- Seleziona Produzione --</option>
-              ${productions.sort((a,b) => new Date(b.date) - new Date(a.date)).map(p => 
+              ${productions.sort((a,b) => new Date(b.date) - new Date(a.date)).map(p =>
                 `<option value="${p.id}">${p.recipeName} - Lotto: ${p.lot} (${App.formatDate(p.date)})</option>`
               ).join('')}
             </select>
           </div>
-          
-          <button class="btn-primary" id="btn-generate-label"><i class="ph ph-magic-wand"></i> Genera Etichetta</button>
+
+          <!-- Two distinct print buttons -->
+          <div style="display: flex; flex-direction: column; gap: 14px; margin-top: 24px;">
+
+            <!-- Btn 1: Internal label -->
+            <div style="background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 100%); border-radius: 14px; padding: 18px; color: white;">
+              <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 10px;">
+                <div style="background: rgba(255,255,255,0.15); border-radius: 10px; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; font-size: 22px; flex-shrink: 0;">
+                  <i class="ph-fill ph-qr-code"></i>
+                </div>
+                <div>
+                  <div style="font-size: 16px; font-weight: 800; letter-spacing: -0.3px;">Etichetta Interna</div>
+                  <div style="font-size: 12px; opacity: 0.7; margin-top: 2px;">QR Code · Operatore · Solo uso laboratorio</div>
+                </div>
+              </div>
+              <button id="btn-label-interna" class="btn-primary" style="width: 100%; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); color: white; font-weight: 700; letter-spacing: 0.3px;">
+                <i class="ph ph-printer"></i> Stampa Etichetta Interna
+              </button>
+            </div>
+
+            <!-- Btn 2: Sales label -->
+            <div style="background: linear-gradient(135deg, #065f46 0%, #047857 100%); border-radius: 14px; padding: 18px; color: white;">
+              <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 10px;">
+                <div style="background: rgba(255,255,255,0.15); border-radius: 10px; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; font-size: 22px; flex-shrink: 0;">
+                  <i class="ph-fill ph-certificate"></i>
+                </div>
+                <div>
+                  <div style="font-size: 16px; font-weight: 800; letter-spacing: -0.3px;">Etichetta Vendita</div>
+                  <div style="font-size: 12px; opacity: 0.7; margin-top: 2px;">Reg. UE 1169/2011 · Dati OSA · Nessun QR</div>
+                </div>
+              </div>
+              <button id="btn-label-vendita" class="btn-primary" style="width: 100%; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); color: white; font-weight: 700; letter-spacing: 0.3px;">
+                <i class="ph ph-tag"></i> Stampa Etichetta Vendita
+              </button>
+            </div>
+
+          </div>
         </div>
 
-        <div id="label-result-container" style="display:none;">
+        <div id="label-result-container" style="display:none; margin-top: 20px;">
            <!-- Label preview injected here -->
         </div>
       `;
@@ -4557,14 +4807,46 @@ const App = {
       };
     }
 
-    if (type === 'label-pre-print') {
+    if (type === 'label-pre-print-interna') {
       const prodId = extraArg;
-      title.innerHTML = '<i class="ph ph-printer"></i> Configurazione Etichetta';
-      
+      const workers = Store.data.workers || [];
+      title.innerHTML = '<i class="ph-fill ph-qr-code"></i> Etichetta Interna — Configura';
+
       body.innerHTML = `
+        <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">Questa etichetta è per uso interno del laboratorio. Contiene il QR Code di tracciabilità e il riferimento all'operatore.</p>
+        <div class="form-group">
+          <label><i class="ph ph-user"></i> Operatore (Responsabile Produzione) *</label>
+          <select id="label-interna-operator">
+            <option value="">-- Seleziona Operatore --</option>
+            ${workers.map(w => `<option value="${w.firstName} ${w.lastName}">${w.firstName} ${w.lastName} — ${w.role || ''}</option>`).join('')}
+          </select>
+          ${workers.length === 0 ? '<p style="font-size: 11px; color: var(--danger-color); margin-top: 5px;"><i class="ph ph-warning"></i> Nessun lavoratore configurato. Vai in Impostazioni > Lavoratori.</p>' : ''}
+        </div>
+        <div class="form-group">
+          <label><i class="ph ph-note"></i> Note aggiuntive (facoltativo)</label>
+          <input type="text" id="label-interna-notes" placeholder="es. Frigo 1, lotto speciale..." />
+        </div>
+      `;
+
+      saveBtn.innerHTML = '<i class="ph ph-printer"></i> Stampa Etichetta Interna';
+      saveBtn.onclick = () => {
+        const operator = document.getElementById('label-interna-operator').value;
+        const notes = document.getElementById('label-interna-notes').value;
+        if (!operator) { alert('Seleziona l\'operatore responsabile.'); return; }
+        this.closeModal();
+        this.printLabelInterna(prodId, operator, notes);
+      };
+    }
+
+    if (type === 'label-pre-print-vendita') {
+      const prodId = extraArg;
+      title.innerHTML = '<i class="ph-fill ph-certificate"></i> Etichetta Vendita — Configura';
+
+      body.innerHTML = `
+        <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">Etichetta conforme <strong>Reg. UE 1169/2011</strong>. Nessun QR Code. Dati OSA in calce.</p>
         <div class="form-group">
           <label>Peso Netto (g) *</label>
-          <input type="number" id="label-weight" placeholder="es. 250" />
+          <input type="number" id="label-weight" placeholder="es. 250" min="1" />
         </div>
         <div class="form-group">
           <label>Modalità di Conservazione</label>
@@ -4581,15 +4863,13 @@ const App = {
           <input type="text" id="label-storage-notes" placeholder="es. Consumare previa cottura" />
         </div>
       `;
-      
-      saveBtn.innerHTML = '<i class="ph ph-check"></i> Conferma e Anteprima';
+
+      saveBtn.innerHTML = '<i class="ph ph-tag"></i> Anteprima Etichetta Vendita';
       saveBtn.onclick = () => {
         const weight = document.getElementById('label-weight').value;
         const storage = document.getElementById('label-storage').value;
         const notes = document.getElementById('label-storage-notes').value;
-        
-        if(!weight) { alert("Inserisci il peso in grammi."); return; }
-        
+        if (!weight) { alert('Inserisci il peso in grammi.'); return; }
         this.closeModal();
         this.generateLabelPreview(prodId, { weight, storage, notes });
       };
@@ -4888,19 +5168,95 @@ const App = {
 
 
   bindLabelEvents() {
-    const btn = document.getElementById('btn-generate-label');
-    if(!btn) return;
-    
-    btn.addEventListener('click', () => {
-      const prodId = document.getElementById('label-production-select').value;
-      
-      if(!prodId) {
-        alert("Seleziona una produzione");
-        return;
-      }
+    const btnInterna = document.getElementById('btn-label-interna');
+    const btnVendita = document.getElementById('btn-label-vendita');
 
-      this.openModal('label-pre-print', prodId);
-    });
+    const getSelectedProd = () => {
+      const prodId = document.getElementById('label-production-select').value;
+      if (!prodId) { alert('Seleziona prima una produzione.'); return null; }
+      return prodId;
+    };
+
+    if (btnInterna) {
+      btnInterna.addEventListener('click', () => {
+        const prodId = getSelectedProd();
+        if (prodId) this.openModal('label-pre-print-interna', prodId);
+      });
+    }
+
+    if (btnVendita) {
+      btnVendita.addEventListener('click', () => {
+        const prodId = getSelectedProd();
+        if (prodId) this.openModal('label-pre-print-vendita', prodId);
+      });
+    }
+  },
+
+  printLabelInterna(prodId, operatorName, notes) {
+    const prod = (Store.data.productions || []).find(p => p.id === prodId);
+    if (!prod) return;
+
+    const baseUrl = window.location.href.split('?')[0];
+    const qrUrl = baseUrl + '?view=trace_production_detail&id=' + prodId;
+    const expiryFormatted = App.formatDate(prod.expiry);
+    const notesHtml = notes ? `<div style="font-size: 10px; color: #555; margin-top: 6px; font-style: italic;">${notes}</div>` : '';
+
+    const w = window.open('', '_blank');
+    w.document.write(`
+      <!DOCTYPE html>
+      <html><head>
+        <meta charset="UTF-8">
+        <title>Etichetta Interna — ${prod.recipeName}</title>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"><\/script>
+        <style>
+          * { box-sizing: border-box; margin: 0; padding: 0; }
+          body { font-family: 'Helvetica Neue', Arial, sans-serif; background: #f4f4f4; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+          .label { background: white; border: 2px solid #0f172a; border-radius: 12px; width: 320px; padding: 18px; box-shadow: 0 4px 16px rgba(0,0,0,0.15); }
+          .badge { display: inline-block; background: #0f172a; color: white; font-size: 9px; font-weight: 700; padding: 2px 8px; border-radius: 20px; letter-spacing: 1px; margin-bottom: 10px; text-transform: uppercase; }
+          .title { font-size: 20px; font-weight: 800; color: #0f172a; text-align: center; margin-bottom: 12px; letter-spacing: -0.5px; }
+          .row { display: flex; justify-content: space-between; font-size: 12px; padding: 5px 0; border-bottom: 1px solid #e5e7eb; }
+          .row:last-of-type { border-bottom: none; }
+          .row label { color: #6b7280; font-weight: 600; }
+          .row span { font-weight: 700; color: #111827; text-align: right; }
+          .qr-section { text-align: center; margin-top: 14px; padding-top: 12px; border-top: 2px dashed #e5e7eb; }
+          .qr-section p { font-size: 10px; color: #9ca3af; margin-top: 6px; }
+          .operator-footer { margin-top: 14px; padding: 10px 12px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; }
+          .operator-footer .label-op { font-size: 10px; color: #9ca3af; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; }
+          .operator-footer .name { font-size: 13px; font-weight: 800; color: #0f172a; margin-top: 2px; }
+          @media print { body { background: white; } .label { box-shadow: none; } }
+        </style>
+      </head><body>
+        <div class="label">
+          <div class="badge">&#128203; uso interno laboratorio</div>
+          <div class="title">${prod.recipeName}</div>
+          <div class="row"><label>Lotto Interno</label><span>${prod.lot}</span></div>
+          <div class="row"><label>Data Produzione</label><span>${App.formatDate(prod.date)}</span></div>
+          <div class="row"><label>Scadenza / TMC</label><span>${expiryFormatted}</span></div>
+          <div class="row"><label>Quantità</label><span>${prod.quantityProduced} kg/pz</span></div>
+          ${notesHtml ? `<div class="row" style="display:block; padding-top: 8px;">${notesHtml}</div>` : ''}
+          <div class="qr-section">
+            <div id="qr-print"></div>
+            <p>Scansiona per aprire la scheda di tracciabilit&#224;</p>
+          </div>
+          <div class="operator-footer">
+            <div class="label-op">&#128100; Operatore Responsabile</div>
+            <div class="name">${operatorName}</div>
+          </div>
+        </div>
+        <script>
+          window.onload = function() {
+            new QRCode(document.getElementById('qr-print'), {
+              text: '${qrUrl}',
+              width: 110, height: 110,
+              colorDark: '#0f172a', colorLight: '#ffffff',
+              correctLevel: QRCode.CorrectLevel.H
+            });
+            setTimeout(function() { window.print(); }, 600);
+          };
+        <\/script>
+      </body></html>
+    `);
+    w.document.close();
   },
 
   generateLabelPreview(prodId, extraData) {
@@ -4936,56 +5292,51 @@ const App = {
     const ingString = ingredients.map(ing => {
       let text = ing.name;
       if(ing.isAllergen) {
-        text = `<b>${text.toUpperCase()}</b>`; // Grassetto Maiuscolo per allergeni
+        text = `<b>${text.toUpperCase()}</b>`;
       }
       return text;
     }).join(', ');
+
+    const ingStringClean = ingString; // stesso formato, usato nell'anteprima
 
     const storageText = extraData.notes ? `${extraData.storage} ${extraData.notes}` : extraData.storage;
 
     const container = document.getElementById('label-result-container');
     container.style.display = 'block';
     container.innerHTML = `
-      <div class="card" style="margin-top: 20px; border: 2px solid var(--primary-color);">
-        <div class="label-preview" id="label-html" style="padding: 20px; background: white; border-radius: 8px;">
-          <div class="label-title" style="text-align: center; font-size: 20px; font-weight: 800; margin-bottom: 15px; text-transform: uppercase;">${prod.recipeName}</div>
-          
-          <div class="label-ingredients" style="font-size: 13px; line-height: 1.4; margin-bottom: 15px;">
-            <strong>Ingredienti:</strong> ${ingString}.
-          </div>
-          
-          <div style="font-size: 13px; margin-bottom: 15px;">
-             <strong>Peso Netto:</strong> ${extraData.weight} g<br>
-             <strong>Modalità di conservazione:</strong> ${storageText}<br>
-             <strong>Lotto:</strong> ${lotto}<br>
-             <strong>${expiryWording}:</strong> ${expiryFormatted}
-          </div>
-
-          <div style="display: flex; justify-content: space-between; align-items: flex-end;">
-            <div style="font-size: 10px; color: var(--text-secondary); max-width: 60%;">
-              Prodotto da:<br>${osaText}
-            </div>
-            <div class="label-qr" id="qr-code-container"></div>
+      <div class="card" style="border: 2px solid #047857;">
+        <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 16px;">
+          <i class="ph-fill ph-certificate" style="color: #047857; font-size: 22px;"></i>
+          <div>
+            <div style="font-weight: 800; font-size: 15px; color: #047857;">Anteprima Etichetta Vendita</div>
+            <div style="font-size: 11px; color: var(--text-secondary);">Reg. UE 1169/2011 — Nessun QR Code</div>
           </div>
         </div>
-        
-        <button class="btn-primary" style="margin-top: 20px; width: 100%;" onclick="App.exportLabelPDF('${prod.recipeName.replace(/'/g, "\\'")}', '${ingString.replace(/<[^>]*>?/gm, '').replace(/'/g, "\\'")}', '${lotto}', '${expiryFormatted}', '${extraData.weight}', '${storageText.replace(/'/g, "\\'")}', '${expiryWording}', '${osaText.replace(/'/g, "\\'")}')">
-          <i class="ph ph-printer"></i> Stampa Etichetta Reg. 1169/2011 (PDF)
+
+        <div id="label-html" style="padding: 20px; background: white; border-radius: 8px; border: 1px solid #d1fae5;">
+          <div style="text-align: center; font-size: 20px; font-weight: 800; margin-bottom: 14px; text-transform: uppercase; letter-spacing: -0.5px;">${prod.recipeName}</div>
+
+          <div style="font-size: 12px; line-height: 1.6; margin-bottom: 14px; padding: 10px; background: #f8fafc; border-radius: 8px;">
+            <strong>Ingredienti:</strong> ${ingStringClean}.
+          </div>
+
+          <div style="font-size: 13px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 4px;">
+            <div><strong>Peso Netto:</strong> ${extraData.weight} g</div>
+            <div><strong>Conservazione:</strong> ${storageText}</div>
+            <div><strong>Lotto:</strong> ${lotto}</div>
+            <div><strong>${expiryWording}:</strong> ${expiryFormatted}</div>
+          </div>
+
+          <div style="margin-top: 14px; padding-top: 12px; border-top: 1px dashed #d1d5db; font-size: 10px; color: #6b7280; line-height: 1.5;">
+            <strong style="text-transform: uppercase; font-size: 9px; letter-spacing: 0.5px;">Prodotto e confezionato da:</strong><br>
+            ${osaText}
+          </div>
+        </div>
+
+        <button class="btn-primary" style="margin-top: 16px; width: 100%; background: #047857;" onclick="App.exportLabelPDF('${prod.recipeName.replace(/'/g, "\\'")}', '${ingString.replace(/<[^>]*>?/gm, '').replace(/'/g, "\\'")}', '${lotto}', '${expiryFormatted}', '${extraData.weight}', '${storageText.replace(/'/g, "\\'")}', '${expiryWording}', '${osaText.replace(/'/g, "\\'")}')"><i class="ph ph-printer"></i> Scarica PDF Etichetta Vendita
         </button>
       </div>
     `;
-
-    // Generate QR Code
-    const baseUrl = window.location.href.split('?')[0];
-    const qrText = baseUrl + '?view=trace_production_detail&id=' + prodId;
-    new QRCode(document.getElementById("qr-code-container"), {
-      text: qrText,
-      width: 120,
-      height: 120,
-      colorDark : "#111827",
-      colorLight : "#ffffff",
-      correctLevel : QRCode.CorrectLevel.H
-    });
   },
 
   toggleTempCheckForm(val) {
