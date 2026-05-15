@@ -23,7 +23,19 @@ const Store = {
       modelNonCompliance: 'MOD-NC Rev.0',
       modelStructure: 'MOD-STR Rev.0',
       modelGeneric: 'MOD-GEN Rev.0',
-      structureFrequency: 'Settimanale'
+      structureFrequency: 'Settimanale',
+      quick_actions: ['trace_incoming', 'trace_production', 'labels', 'haccp_nc'],
+      model_configs: {
+        'haccp_temperature': { model: 'MOD-TEMP Rev.0', frequency: 'Quotidiana' },
+        'haccp_sanitation': { model: 'MOD-SAN Rev.0', frequency: 'Quotidiana' },
+        'haccp_hygiene': { model: 'MOD-HYG Rev.0', frequency: 'Quotidiana' },
+        'haccp_noncompliance': { model: 'MOD-NC Rev.0', frequency: "All'occorrenza" },
+        'haccp_structure': { model: 'MOD-STR Rev.0', frequency: 'Settimanale' },
+        'trace_incoming': { model: 'MOD-CAR Rev.0', frequency: "All'occorrenza" },
+        'trace_production': { model: 'MOD-PROD Rev.0', frequency: "All'occorrenza" },
+        'trace_suppliers': { model: 'MOD-FOR Rev.0', frequency: "All'occorrenza" },
+        'haccp_maintenance': { model: 'MOD-MAN Rev.0', frequency: "All'occorrenza" }
+      }
     },
     company: {
       ragioneSociale: '',
@@ -34,6 +46,7 @@ const Store = {
       tipologiaAttivita: ''
     },
     haccp_structure: [],
+    haccp_maintenance: [],
     haccp_temp_equipments: [],
     equipments: [
       { id: 'EQ-1', name: 'Affettatrice' },
@@ -108,6 +121,7 @@ const Store = {
         const tables = [
           'haccp_sanitation', 'haccp_temperature', 'haccp_chiller', 
           'haccp_hygiene', 'haccp_noncompliance', 'haccp_structure',
+          'haccp_maintenance',
           'haccp_temp_equipments', 'workers', 'equipments', 
           'work_environments', 'detergents', 'suppliers', 
           'ingredients', 'incoming_goods', 'recipes', 'productions'
@@ -119,6 +133,23 @@ const Store = {
 
         if (!this.data.settings.modelStructure) this.data.settings.modelStructure = 'MOD-STR Rev.0';
         if (!this.data.settings.structureFrequency) this.data.settings.structureFrequency = 'Settimanale';
+        if (!this.data.settings.quick_actions) {
+          this.data.settings.quick_actions = ['trace_incoming', 'trace_production', 'labels', 'haccp_nc'];
+        }
+        if (!this.data.settings.model_configs) {
+          this.data.settings.model_configs = {
+            'haccp_temperature': { model: 'MOD-TEMP Rev.0', frequency: 'Quotidiana' },
+            'haccp_sanitation': { model: 'MOD-SAN Rev.0', frequency: 'Quotidiana' },
+            'haccp_hygiene': { model: 'MOD-HYG Rev.0', frequency: 'Quotidiana' },
+            'haccp_noncompliance': { model: 'MOD-NC Rev.0', frequency: "All'occorrenza" },
+            'haccp_structure': { model: 'MOD-STR Rev.0', frequency: 'Settimanale' },
+            'trace_incoming': { model: 'MOD-CAR Rev.0', frequency: "All'occorrenza" },
+            'trace_production': { model: 'MOD-PROD Rev.0', frequency: "All'occorrenza" },
+            'trace_suppliers': { model: 'MOD-FOR Rev.0', frequency: "All'occorrenza" },
+            'haccp_maintenance': { model: 'MOD-MAN Rev.0', frequency: "All'occorrenza" }
+          };
+        }
+        
         if (!this.data.company) {
           this.data.company = {
             ragioneSociale: '',
@@ -232,45 +263,87 @@ const Store = {
   getHaccpStatus() {
     const today = new Date().toISOString().split('T')[0];
     const data = this.data || {};
-    
-    const checkToday = (table) => {
-      if (!data[table]) return false;
-      return data[table].some(item => {
-        const itemDate = item.date || (item.createdAt && item.createdAt.split('T')[0]);
-        return itemDate === today;
-      });
-    };
-
-    const status = {
-      temperature: checkToday('haccp_temperature'),
-      sanitation: checkToday('haccp_sanitation'),
-      hygiene: checkToday('haccp_hygiene')
-    };
-    
-    status.allOk = status.temperature && status.sanitation && status.hygiene;
-    
-    // Controllo Ambienti e Strutture basato su frequenza
     const settings = data.settings || {};
-    const freq = settings.structureFrequency || 'Settimanale';
-    const records = data.haccp_structure || [];
-    let structureDone = false;
+    const modelConfigs = settings.model_configs || {};
     
-    if (freq === 'Settimanale') {
-      const sevenDaysAgo = new Date();
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-      structureDone = records.some(r => r.date && new Date(r.date) >= sevenDaysAgo);
-    } else {
-      const currentMonth = today.substring(0, 7); 
-      structureDone = records.some(r => r.date && r.date.startsWith(currentMonth));
-    }
+    const status = {
+      allOk: true,
+      missing: []
+    };
 
-    status.allOk = status.allOk && structureDone;
-    
-    status.missing = [];
-    if (!status.temperature) status.missing.push("Registro Temperature");
-    if (!status.sanitation) status.missing.push("Registro Sanificazione");
-    if (!status.hygiene) status.missing.push("Registro Igiene Personale");
-    if (!structureDone) status.missing.push(`Ambienti e Strutture (${freq})`);
+    const checkFrequency = (table, freq, label) => {
+      if (!freq || freq === "All'occorrenza") return true;
+      
+      const records = data[table] || [];
+      const now = new Date();
+      let isDone = false;
+
+      if (freq === 'Quotidiana') {
+        isDone = records.some(r => {
+          const rDate = r.date || (r.createdAt && r.createdAt.split('T')[0]);
+          return rDate === today;
+        });
+      } else if (freq === 'Settimanale') {
+        const lastWeek = new Date();
+        lastWeek.setDate(lastWeek.getDate() - 7);
+        isDone = records.some(r => {
+          const rDate = r.date || (r.createdAt && r.createdAt.split('T')[0]);
+          return new Date(rDate) >= lastWeek;
+        });
+      } else if (freq === 'Mensile') {
+        const lastMonth = new Date();
+        lastMonth.setMonth(lastMonth.getMonth() - 1);
+        isDone = records.some(r => {
+          const rDate = r.date || (r.createdAt && r.createdAt.split('T')[0]);
+          return new Date(rDate) >= lastMonth;
+        });
+      } else if (freq === 'Ogni 2 mesi') {
+        const last2Months = new Date();
+        last2Months.setMonth(last2Months.getMonth() - 2);
+        isDone = records.some(r => {
+          const rDate = r.date || (r.createdAt && r.createdAt.split('T')[0]);
+          return new Date(rDate) >= last2Months;
+        });
+      } else if (freq === 'Semestrale') {
+        const last6Months = new Date();
+        last6Months.setMonth(last6Months.getMonth() - 6);
+        isDone = records.some(r => {
+          const rDate = r.date || (r.createdAt && r.createdAt.split('T')[0]);
+          return new Date(rDate) >= last6Months;
+        });
+      } else if (freq === 'Annual' || freq === 'Annuale') {
+        const lastYear = new Date();
+        lastYear.setFullYear(lastYear.getFullYear() - 1);
+        isDone = records.some(r => {
+          const rDate = r.date || (r.createdAt && r.createdAt.split('T')[0]);
+          return new Date(rDate) >= lastYear;
+        });
+      }
+
+      if (!isDone) {
+        status.missing.push(`${label} (${freq})`);
+        status.allOk = false;
+      }
+      return isDone;
+    };
+
+    // Check modules based on config
+    const moduleLabels = {
+      'haccp_temperature': 'Registro Temperature',
+      'haccp_sanitation': 'Registro Sanificazione',
+      'haccp_hygiene': 'Registro Igiene Personale',
+      'haccp_structure': 'Ambienti e Strutture',
+      'haccp_maintenance': 'Registro Manutenzione',
+      'trace_incoming': 'Carico Merci',
+      'trace_production': 'Produzione',
+      'trace_suppliers': 'Elenco Fornitori'
+    };
+
+    for (const [table, config] of Object.entries(modelConfigs)) {
+      if (moduleLabels[table]) {
+        checkFrequency(table, config.frequency, moduleLabels[table]);
+      }
+    }
 
     return status;
   },

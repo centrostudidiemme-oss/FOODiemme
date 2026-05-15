@@ -135,10 +135,26 @@ const App = {
         title.innerText = 'Impostazioni';
         main.innerHTML = this.views.settings();
         break;
-      case 'settings_pdf':
-        title.innerText = 'Modelli PDF';
-        main.innerHTML = this.views.settings_pdf();
+      case 'settings_models':
+        title.innerText = 'Modelli & Frequenze';
+        main.innerHTML = this.views.settings_models();
         this.bindSettingsEvents();
+        break;
+      case 'settings_model_detail':
+        title.innerText = 'Configurazione Modello';
+        main.innerHTML = this.views.settings_model_detail(this.currentRecordId);
+        break;
+      case 'dashboard_quick_actions':
+        title.innerText = 'Personalizza Azioni Rapide';
+        main.innerHTML = this.views.dashboard_quick_actions();
+        break;
+      case 'haccp_maintenance':
+        title.innerText = 'Manutenzione';
+        main.innerHTML = this.views.haccp_maintenance();
+        break;
+      case 'haccp_maintenance_detail':
+        title.innerText = 'Dettaglio Manutenzione';
+        main.innerHTML = this.views.haccp_maintenance_detail(this.currentRecordId);
         break;
       case 'settings_equipments':
         title.innerText = 'Attrezzature';
@@ -280,6 +296,67 @@ const App = {
     this.renderView('trace_production_detail');
   },
 
+  goToMaintenanceDetail(id) {
+    this.currentRecordId = id;
+    this.renderView('haccp_maintenance_detail');
+  },
+
+  goToModelDetail(id) {
+    this.currentRecordId = id;
+    this.renderView('settings_model_detail');
+  },
+
+  toggleQuickAction(moduleId) {
+    let qa = Store.data.settings.quick_actions || [];
+    if (qa.includes(moduleId)) {
+      qa = qa.filter(id => id !== moduleId);
+    } else {
+      qa.push(moduleId);
+    }
+    Store.data.settings.quick_actions = qa;
+    Store.save();
+    this.renderView('dashboard_quick_actions');
+  },
+
+  bulkRecordTemperatures() {
+    const equipments = Store.data.haccp_temp_equipments || [];
+    if (equipments.length === 0) {
+      alert("Nessuna attrezzatura configurata.");
+      return;
+    }
+
+    const temp = prompt("Inserisci la temperatura standard per tutte le attrezzature (es. 4):", "4");
+    if (temp === null) return;
+    
+    const tempNum = parseFloat(temp.replace(',', '.'));
+    if (isNaN(tempNum)) {
+      alert("Temperatura non valida.");
+      return;
+    }
+
+    const operator = prompt("Inserisci il nome dell'operatore:");
+    if (!operator) return;
+
+    const today = new Date().toISOString().split('T')[0];
+    const time = new Date().toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+
+    equipments.forEach(eq => {
+      const isConforme = tempNum >= eq.minTemp && tempNum <= eq.maxTemp;
+      Store.addItem('haccp_temperature', {
+        equipmentId: eq.id,
+        date: today,
+        time: time,
+        temp: tempNum,
+        operator: operator,
+        status: isConforme ? 'CONFORME' : 'NON CONFORME',
+        correctiveAction: isConforme ? '' : 'Temperatura fuori range rilevata durante check rapido.'
+      });
+    });
+
+    alert("Temperature registrate per tutti i frigoriferi.");
+    this.renderView('haccp_temp');
+  },
+
   adjustIncomingStock(id) {
      const g = Store.data.incoming_goods.find(x => x.id === id);
      if(!g) return;
@@ -408,6 +485,18 @@ const App = {
       Store.updateItem(tableName, id, { name: newName.trim() });
       this.renderView(viewName);
     }
+  },
+
+  saveModelConfig(moduleId) {
+    const model = document.getElementById('config-model-number').value.trim();
+    const frequency = document.getElementById('config-frequency').value;
+    
+    if (!Store.data.settings.model_configs) Store.data.settings.model_configs = {};
+    Store.data.settings.model_configs[moduleId] = { model, frequency };
+    Store.save();
+    
+    alert("Configurazione salvata con successo.");
+    this.renderView('settings_models');
   },
 
   setHygValue(idx, val) {
@@ -756,22 +845,42 @@ const App = {
           </div>
 
           <div class="card">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                <h3>Azioni Rapide</h3>
+               <div style="display: flex; gap: 8px;">
+                 <button class="btn-icon" onclick="App.renderView('dashboard_quick_actions')" style="background: var(--bg-body); color: var(--primary-color); width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border-color);">
+                   <i class="ph ph-minus" style="font-size: 16px;"></i>
+                 </button>
+                 <button class="btn-icon" onclick="App.renderView('dashboard_quick_actions')" style="background: var(--primary-color); color: white; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; border: none;">
+                   <i class="ph ph-plus" style="font-size: 16px;"></i>
+                 </button>
+               </div>
             </div>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px;">
-              <button class="btn-primary" style="padding: 15px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; font-weight: bold;" onclick="App.openModal('incoming')">
-                <i class="ph ph-truck" style="font-size: 24px;"></i> Carico Merci
-              </button>
-              <button class="btn-primary" style="padding: 15px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; font-weight: bold; background-color: #10b981;" onclick="App.openModal('production')">
-                <i class="ph ph-cooking-pot" style="font-size: 24px;"></i> Produzione
-              </button>
-              <button class="btn-primary" style="padding: 15px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; font-weight: bold; background-color: #6366f1;" onclick="App.renderView('labels')">
-                <i class="ph ph-tag" style="font-size: 24px;"></i> Etichette
-              </button>
-              <button class="btn-primary" style="padding: 15px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; font-weight: bold; background-color: #ef4444;" onclick="App.openModal('noncompliance')">
-                <i class="ph ph-warning" style="font-size: 24px;"></i> Segnala NC
-              </button>
+              ${(Store.data.settings.quick_actions || []).map(actionId => {
+                const actionMap = {
+                  'trace_incoming': { label: 'Carico Merci', icon: 'ph-truck', color: 'var(--primary-color)', onclick: "App.openModal('incoming')" },
+                  'trace_production': { label: 'Produzione', icon: 'ph-cooking-pot', color: '#10b981', onclick: "App.openModal('production')" },
+                  'labels': { label: 'Etichette', icon: 'ph-tag', color: '#6366f1', onclick: "App.renderView('labels')" },
+                  'haccp_nc': { label: 'Segnala NC', icon: 'ph-warning', color: '#ef4444', onclick: "App.openModal('noncompliance')" },
+                  'haccp_temp': { label: 'Temperature', icon: 'ph-thermometer-cold', color: '#3b82f6', onclick: "App.renderView('haccp_temp')" },
+                  'haccp_sanitation': { label: 'Sanificazione', icon: 'ph-sparkle', color: '#10b981', onclick: "App.renderView('haccp_sanitation')" },
+                  'haccp_hygiene': { label: 'Igiene', icon: 'ph-users', color: '#f59e0b', onclick: "App.renderView('haccp_hygiene')" },
+                  'haccp_structure': { label: 'Strutture', icon: 'ph-house-line', color: '#6366f1', onclick: "App.renderView('haccp_structure')" },
+                  'haccp_maintenance': { label: 'Manutenzione', icon: 'ph-wrench', color: '#64748b', onclick: "App.renderView('haccp_maintenance')" },
+                  'trace_recipes': { label: 'Ricettario', icon: 'ph-book-bookmark', color: '#3b82f6', onclick: "App.renderView('trace_recipes')" },
+                  'trace_suppliers': { label: 'Fornitori', icon: 'ph-address-book', color: '#f59e0b', onclick: "App.renderView('trace_suppliers')" },
+                  'trace_ingredients': { label: 'Magazzino', icon: 'ph-warehouse', color: '#3b82f6', onclick: "App.renderView('trace_ingredients')" }
+                };
+                const action = actionMap[actionId];
+                if (!action) return '';
+                return `
+                  <button class="btn-primary" style="padding: 15px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; font-weight: bold; background-color: ${action.color};" onclick="${action.onclick}">
+                    <i class="ph ${action.icon}" style="font-size: 24px;"></i> ${action.label}
+                  </button>
+                `;
+              }).join('')}
+              ${(Store.data.settings.quick_actions || []).length === 0 ? '<p style="grid-column: span 2; text-align: center; color: var(--text-secondary); font-size: 13px; padding: 10px;">Nessuna azione rapida configurata. Clicca (+) per aggiungerne.</p>' : ''}
             </div>
           </div>
         `;
@@ -801,7 +910,102 @@ const App = {
           </div>
           <div class="widget" onclick="App.renderView('haccp_structure')" style="cursor: pointer; padding: 15px;">
             <div class="widget-icon" style="background: #6366f1; width: 40px; height: 40px; font-size: 20px;"><i class="ph-fill ph-house-line"></i></div>
-            <div class="widget-value" style="font-size: 16px; margin-top: 5px;">Ambienti e Strutture</div>
+            <div class="widget-value" style="font-size: 16px; margin-top: 5px;">Ambienti</div>
+          </div>
+          <div class="widget" onclick="App.renderView('haccp_maintenance')" style="cursor: pointer; padding: 15px;">
+            <div class="widget-icon" style="background: #64748b; width: 40px; height: 40px; font-size: 20px;"><i class="ph-fill ph-wrench"></i></div>
+            <div class="widget-value" style="font-size: 16px; margin-top: 5px;">Manutenzione</div>
+          </div>
+        </div>
+      `;
+    },
+
+    haccp_maintenance() {
+      const records = Store.data.haccp_maintenance || [];
+      const filtered = records.sort((a,b) => new Date(b.date) - new Date(a.date));
+      return `
+        <div class="card">
+          <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.renderView('haccp')"><i class="ph ph-arrow-left"></i> Indietro</button>
+          <h3><i class="ph-fill ph-wrench"></i> Registro Manutenzione</h3>
+          <div style="margin-top: 16px; margin-bottom: 20px;">
+            <button class="btn-primary" style="width: 100%;" onclick="App.openModal('maintenance')"><i class="ph ph-plus"></i> Nuova Manutenzione</button>
+          </div>
+          <div class="list-container">
+            ${filtered.length > 0 ? filtered.map(r => `
+              <div class="list-item" style="padding: 12px; border-bottom: 1px solid var(--border-color); cursor: pointer;" onclick="App.goToMaintenanceDetail('${r.id}')">
+                <div style="flex: 1;">
+                  <div class="item-title">${App.formatDate(r.date)} - ${r.subject}</div>
+                  <div class="item-subtitle" style="font-size: 11px;">${r.type === 'Ordinary' ? 'Ordinaria (Interna)' : 'Straordinaria (Esterna: ' + (r.externalCompany || 'N/D') + ')'}</div>
+                </div>
+                <i class="ph ph-caret-right" style="color: var(--text-secondary);"></i>
+              </div>
+            `).join('') : '<p style="text-align: center; color: var(--text-secondary);">Nessuna manutenzione registrata.</p>'}
+          </div>
+        </div>
+      `;
+    },
+
+    haccp_maintenance_detail(id) {
+      const r = Store.data.haccp_maintenance.find(x => x.id === id);
+      if(!r) return `<div class="card"><p>Manutenzione non trovata.</p></div>`;
+
+      return `
+        <div class="card">
+          <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.renderView('haccp_maintenance')"><i class="ph ph-arrow-left"></i> Indietro</button>
+          <div style="background: var(--bg-body); padding: 20px; border-radius: 12px; border: 1px solid var(--border-color);">
+            <h2 style="color: var(--primary-color); margin-bottom: 10px;">Dettaglio Manutenzione</h2>
+            <p><strong>Data:</strong> ${App.formatDate(r.date)}</p>
+            <p><strong>Soggetto:</strong> ${r.subject}</p>
+            <p><strong>Tipo:</strong> ${r.type === 'Ordinary' ? 'Ordinaria (Interna)' : 'Straordinaria (Esterna)'}</p>
+            ${r.type === 'Extraordinary' ? `<p><strong>Ditta Esterna:</strong> ${r.externalCompany || 'N/D'}</p>` : ''}
+            <p><strong>Responsabile:</strong> ${r.operator}</p>
+            <div style="margin-top: 15px; padding: 10px; background: white; border-radius: 8px; border: 1px solid rgba(0,0,0,0.05);">
+              <strong>Descrizione:</strong>
+              <p style="margin-top: 5px;">${r.description || 'Nessuna descrizione'}</p>
+            </div>
+          </div>
+          <div style="display: flex; gap: 10px; margin-top: 24px;">
+            <button class="btn-danger" style="flex: 1;" onclick="App.removeItem('haccp_maintenance', '${r.id}', 'haccp_maintenance')"><i class="ph ph-trash"></i> Elimina</button>
+          </div>
+        </div>
+      `;
+    },
+
+    dashboard_quick_actions() {
+      const qa = Store.data.settings.quick_actions || [];
+      const modules = [
+        { id: 'haccp_temp', label: 'Temperature', section: 'HACCP' },
+        { id: 'haccp_sanitation', label: 'Sanificazione', section: 'HACCP' },
+        { id: 'haccp_hygiene', label: 'Igiene Personale', section: 'HACCP' },
+        { id: 'haccp_nc', label: 'Non Conformità', section: 'HACCP' },
+        { id: 'haccp_structure', label: 'Ambienti', section: 'HACCP' },
+        { id: 'haccp_maintenance', label: 'Manutenzione', section: 'HACCP' },
+        { id: 'trace_incoming', label: 'Carico Merci', section: 'Tracciabilità' },
+        { id: 'trace_production', label: 'Produzione', section: 'Tracciabilità' },
+        { id: 'trace_recipes', label: 'Ricettario', section: 'Tracciabilità' },
+        { id: 'trace_suppliers', label: 'Fornitori', section: 'Tracciabilità' },
+        { id: 'trace_ingredients', label: 'Magazzino', section: 'Tracciabilità' },
+        { id: 'labels', label: 'Etichette', section: 'Tracciabilità' }
+      ];
+
+      return `
+        <div class="card">
+          <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.renderView('dashboard')"><i class="ph ph-arrow-left"></i> Indietro</button>
+          <h3><i class="ph ph-list-plus"></i> Personalizza Azioni Rapide</h3>
+          <p style="margin-bottom: 20px;">Seleziona i moduli da visualizzare nella sezione Azioni Rapide della Dashboard.</p>
+          
+          <div class="list-container">
+            ${modules.map(m => `
+              <div class="list-item" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--border-color);">
+                <div>
+                  <div style="font-weight: 600;">${m.label}</div>
+                  <div style="font-size: 11px; color: var(--text-secondary);">${m.section}</div>
+                </div>
+                <button class="${qa.includes(m.id) ? 'btn-danger' : 'btn-primary'}" style="width: auto; padding: 5px 12px; font-size: 12px;" onclick="App.toggleQuickAction('${m.id}')">
+                  <i class="ph ${qa.includes(m.id) ? 'ph-minus' : 'ph-plus'}"></i> ${qa.includes(m.id) ? 'Rimuovi' : 'Aggiungi'}
+                </button>
+              </div>
+            `).join('')}
           </div>
         </div>
       `;
@@ -816,8 +1020,9 @@ const App = {
           <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.renderView('haccp')"><i class="ph ph-arrow-left"></i> Indietro</button>
           <h3><i class="ph-fill ph-thermometer-cold"></i> Temperature Frigoriferi</h3>
           
-          <div style="margin-top: 16px; margin-bottom: 16px;">
-             <button class="btn-primary" onclick="App.openModal('new-temp-equipment')"><i class="ph ph-plus"></i> Nuova Attrezzatura</button>
+          <div style="margin-top: 16px; margin-bottom: 16px; display: flex; gap: 10px;">
+             <button class="btn-primary" style="flex: 1;" onclick="App.openModal('new-temp-equipment')"><i class="ph ph-plus"></i> Nuova Attrezzatura</button>
+             <button class="btn-secondary" style="flex: 1; background: var(--primary-color); color: white;" onclick="App.bulkRecordTemperatures()"><i class="ph ph-check-square"></i> Registra tutto (1 click)</button>
           </div>
           
           ${tempEquipments.length > 0 ? tempEquipments.map(eq => {
@@ -1862,11 +2067,11 @@ const App = {
               <i class="ph ph-caret-right" style="position: absolute; right: 20px; top: 50%; transform: translateY(-50%); opacity: 0.7;"></i>
             </div>
             
-            <div class="widget" onclick="App.renderView('settings_pdf')" style="cursor: pointer;">
-              <div class="widget-icon bg-blue"><i class="ph-fill ph-file-pdf"></i></div>
+            <div class="widget" onclick="App.renderView('settings_models')" style="cursor: pointer;">
+              <div class="widget-icon bg-blue"><i class="ph-fill ph-file-text"></i></div>
               <div>
                 <div class="widget-label">Configurazione</div>
-                <div class="widget-value" style="font-size: 16px;">Modelli PDF</div>
+                <div class="widget-value" style="font-size: 16px;">Modelli</div>
               </div>
             </div>
             <div class="widget" onclick="App.renderView('settings_equipments')" style="cursor: pointer;">
@@ -1984,57 +2189,91 @@ const App = {
         </div>
       `;
     },
-    settings_pdf() {
+    settings_models() {
       const currentSettings = Store.data.settings || {};
-      const applyModel = currentSettings.applyModelNumber !== undefined ? currentSettings.applyModelNumber : true;
-      const modelTemp = currentSettings.modelTemperature || 'MOD-TEMP Rev.0';
-      const modelSan = currentSettings.modelSanitation || 'MOD-SAN Rev.0';
-      const modelHyg = currentSettings.modelHygiene || 'MOD-HYG Rev.0';
-      const modelNC = currentSettings.modelNonCompliance || 'MOD-NC Rev.0';
-      const modelStr = currentSettings.modelStructure || 'MOD-STR Rev.0';
-      const modelGen = currentSettings.modelGeneric || 'MOD-GEN Rev.0';
+      const modelConfigs = currentSettings.model_configs || {};
       
+      const modules = [
+        { id: 'haccp_temperature', label: 'Temperature' },
+        { id: 'haccp_sanitation', label: 'Sanificazione' },
+        { id: 'haccp_hygiene', label: 'Igiene Personale' },
+        { id: 'haccp_noncompliance', label: 'Non Conformità' },
+        { id: 'haccp_structure', label: 'Ambienti' },
+        { id: 'haccp_maintenance', label: 'Manutenzione' },
+        { id: 'trace_incoming', label: 'Carico Merci' },
+        { id: 'trace_production', label: 'Produzione' },
+        { id: 'trace_suppliers', label: 'Fornitori' }
+      ];
+
       return `
         <div class="card">
           <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.renderView('settings')"><i class="ph ph-arrow-left"></i> Indietro</button>
-          <h3><i class="ph-fill ph-file-pdf"></i> Impostazioni PDF</h3>
-          <p>Configura il numero di modello da applicare ai PDF esportati per ogni registro.</p>
+          <h3><i class="ph-fill ph-file-text"></i> Modelli & Frequenze</h3>
+          <p style="margin-bottom: 20px;">Configura il numero di modello e la frequenza di compilazione per ogni registro.</p>
           
-          <div class="form-group" style="margin-top: 20px;">
-            <div class="checkbox-group">
-              <input type="checkbox" id="setting-apply-model" ${applyModel ? 'checked' : ''} />
-              <label for="setting-apply-model" style="margin-bottom:0; font-size: 14px;">Applica numeri di modello ai PDF</label>
-            </div>
+          <div style="display: grid; grid-template-columns: 1fr; gap: 10px;">
+            ${modules.map(m => {
+              const config = modelConfigs[m.id] || { model: 'N/D', frequency: "All'occorrenza" };
+              return `
+                <button class="btn-secondary" style="padding: 15px; text-align: left; display: flex; justify-content: space-between; align-items: center;" onclick="App.goToModelDetail('${m.id}')">
+                  <div>
+                    <div style="font-weight: 700; font-size: 15px;">${m.label}</div>
+                    <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">Modello: ${config.model} | Freq: ${config.frequency}</div>
+                  </div>
+                  <i class="ph ph-caret-right"></i>
+                </button>
+              `;
+            }).join('')}
           </div>
-
-          <div class="form-group">
-             <label><i class="ph ph-text-t"></i> Numero Modello - Reg. Temperature</label>
-             <input type="text" id="setting-model-temp" value="${modelTemp}" class="input-lg" />
-          </div>
-          <div class="form-group">
-             <label><i class="ph ph-text-t"></i> Numero Modello - Reg. Sanificazione</label>
-             <input type="text" id="setting-model-san" value="${modelSan}" class="input-lg" />
-          </div>
-          <div class="form-group">
-             <label><i class="ph ph-text-t"></i> Numero Modello - Reg. Igiene Personale</label>
-             <input type="text" id="setting-model-hyg" value="${modelHyg}" class="input-lg" />
-          </div>
-          <div class="form-group">
-             <label><i class="ph ph-text-t"></i> Numero Modello - Non Conformità</label>
-             <input type="text" id="setting-model-nc" value="${modelNC}" class="input-lg" />
-          </div>
-          <div class="form-group">
-             <label><i class="ph ph-text-t"></i> Numero Modello - Ambienti/Strutture</label>
-             <input type="text" id="setting-model-str" value="${modelStr}" class="input-lg" />
-          </div>
-          <div class="form-group">
-             <label><i class="ph ph-text-t"></i> Numero Modello - Generico / Altri</label>
-             <input type="text" id="setting-model-gen" value="${modelGen}" class="input-lg" />
-          </div>
-
-          <button class="btn-primary" id="btn-save-settings"><i class="ph ph-floppy-disk"></i> Salva Impostazioni</button>
         </div>
       `;
+    },
+
+    settings_model_detail(moduleId) {
+      const currentSettings = Store.data.settings || {};
+      const modelConfigs = currentSettings.model_configs || {};
+      const config = modelConfigs[moduleId] || { model: '', frequency: "All'occorrenza" };
+      
+      const moduleLabels = {
+        'haccp_temperature': 'Temperature',
+        'haccp_sanitation': 'Sanificazione',
+        'haccp_hygiene': 'Igiene Personale',
+        'haccp_noncompliance': 'Non Conformità',
+        'haccp_structure': 'Ambienti',
+        'haccp_maintenance': 'Manutenzione',
+        'trace_incoming': 'Carico Merci',
+        'trace_production': 'Produzione',
+        'trace_suppliers': 'Fornitori'
+      };
+
+      return `
+        <div class="card">
+          <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.renderView('settings_models')"><i class="ph ph-arrow-left"></i> Indietro</button>
+          <h3>Configura: ${moduleLabels[moduleId]}</h3>
+          
+          <div class="form-group" style="margin-top: 20px;">
+             <label><i class="ph ph-hash"></i> Numero Modello (per report di stampa)</label>
+             <input type="text" id="config-model-number" value="${config.model}" class="input-lg" placeholder="Es. MOD-TEMP Rev.0" />
+          </div>
+
+          <div class="form-group">
+            <label><i class="ph ph-calendar"></i> Frequenza di Compilazione</label>
+            <select id="config-frequency" class="input-lg">
+              <option value="Quotidiana" ${config.frequency === 'Quotidiana' ? 'selected' : ''}>Quotidiana</option>
+              <option value="Settimanale" ${config.frequency === 'Settimanale' ? 'selected' : ''}>Settimanale</option>
+              <option value="Mensile" ${config.frequency === 'Mensile' ? 'selected' : ''}>Mensile</option>
+              <option value="Ogni 2 mesi" ${config.frequency === 'Ogni 2 mesi' ? 'selected' : ''}>Ogni 2 mesi</option>
+              <option value="Semestrale" ${config.frequency === 'Semestrale' ? 'selected' : ''}>Semestrale</option>
+              <option value="Annuale" ${config.frequency === 'Annuale' ? 'selected' : ''}>Annuale</option>
+              <option value="All'occorrenza" ${config.frequency === "All'occorrenza" ? 'selected' : ''}>All'occorrenza</option>
+            </select>
+            <p style="font-size: 11px; color: var(--text-secondary); margin-top: 5px;">Se impostata una frequenza (tranne all'occorrenza), la dashboard ricorderà se la registrazione manca.</p>
+          </div>
+
+          <button class="btn-primary" onclick="App.saveModelConfig('${moduleId}')"><i class="ph ph-floppy-disk"></i> Salva Configurazione</button>
+        </div>
+      `;
+    },
     },
 
     settings_equipments() {
@@ -2201,6 +2440,7 @@ const App = {
           <div class="checkbox-group"><input type="checkbox" class="proc-check" value="igiene" id="p-hyg"><label for="p-hyg">Igiene Personale</label></div>
           <div class="checkbox-group"><input type="checkbox" class="proc-check" value="nc" id="p-nc"><label for="p-nc">Non Conformità</label></div>
           <div class="checkbox-group"><input type="checkbox" class="proc-check" value="ambienti" id="p-str"><label for="p-str">Ambienti e Strutture</label></div>
+          <div class="checkbox-group"><input type="checkbox" class="proc-check" value="manutenzione" id="p-man"><label for="p-man">Manutenzione</label></div>
         </div>
       `;
       saveBtn.onclick = () => {
@@ -2263,6 +2503,7 @@ const App = {
           <div class="checkbox-group"><input type="checkbox" class="proc-check" value="igiene" id="p-hyg" ${mp.includes('igiene') ? 'checked' : ''}><label for="p-hyg">Igiene Personale</label></div>
           <div class="checkbox-group"><input type="checkbox" class="proc-check" value="nc" id="p-nc" ${mp.includes('nc') ? 'checked' : ''}><label for="p-nc">Non Conformità</label></div>
           <div class="checkbox-group"><input type="checkbox" class="proc-check" value="ambienti" id="p-str" ${mp.includes('ambienti') ? 'checked' : ''}><label for="p-str">Ambienti e Strutture</label></div>
+          <div class="checkbox-group"><input type="checkbox" class="proc-check" value="manutenzione" id="p-man" ${mp.includes('manutenzione') ? 'checked' : ''}><label for="p-man">Manutenzione</label></div>
         </div>
       `;
       saveBtn.onclick = () => {
@@ -2394,6 +2635,82 @@ const App = {
 
         this.closeModal();
         this.renderView(this.currentView);
+      };
+    }
+
+    if (type === 'maintenance') {
+      title.innerHTML = '<i class="ph-fill ph-wrench"></i> Registra Manutenzione';
+      const today = new Date().toISOString().split('T')[0];
+      const equipments = Store.data.equipments || [];
+      const eligibleOperators = App.getEligibleOperators('manutenzione');
+
+      body.innerHTML = `
+        <div class="form-group">
+          <label>Data Manutenzione</label>
+          <input type="date" id="form-main-date" value="${today}" />
+        </div>
+        <div class="form-group">
+          <label>Tipo Intervento</label>
+          <select id="form-main-type" onchange="document.getElementById('form-main-eq-group').style.display = (this.value === 'Attrezzature' ? 'block' : 'none')">
+            <option value="Struttura e Ambiente">Struttura e Ambiente</option>
+            <option value="Attrezzature">Attrezzature</option>
+          </select>
+        </div>
+        <div id="form-main-eq-group" class="form-group" style="display: none;">
+          <label>Seleziona Attrezzatura</label>
+          <select id="form-main-equipment">
+            <option value="">-- Scegli Attrezzatura --</option>
+            ${equipments.map(e => `<option value="${e.name}">${e.name}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Descrizione Manutenzione</label>
+          <textarea id="form-main-description" rows="3" placeholder="Descrivi l'intervento effettuato..."></textarea>
+        </div>
+        <div class="form-group">
+          <label>Modalità</label>
+          <select id="form-main-category" onchange="document.getElementById('form-main-company-group').style.display = (this.value === 'Extraordinary' ? 'block' : 'none')">
+            <option value="Ordinary">Ordinaria (Personale Interno)</option>
+            <option value="Extraordinary">Straordinaria (Ditta Esterna)</option>
+          </select>
+        </div>
+        <div id="form-main-company-group" class="form-group" style="display: none;">
+          <label>Nome Ditta Esterna</label>
+          <input type="text" id="form-main-company" placeholder="Nome ditta..." />
+        </div>
+        <div class="form-group">
+          <label>Responsabile Procedura</label>
+          <select id="form-main-operator">
+            <option value="">-- Seleziona Responsabile --</option>
+            ${eligibleOperators.map(w => `<option value="${w.firstName} ${w.lastName}">${w.firstName} ${w.lastName}</option>`).join('')}
+          </select>
+        </div>
+      `;
+
+      saveBtn.onclick = () => {
+        const date = document.getElementById('form-main-date').value;
+        const typeIntervention = document.getElementById('form-main-type').value;
+        const equipment = document.getElementById('form-main-equipment').value;
+        const description = document.getElementById('form-main-description').value;
+        const category = document.getElementById('form-main-category').value;
+        const externalCompany = document.getElementById('form-main-company').value;
+        const operator = document.getElementById('form-main-operator').value;
+
+        if (!operator) { alert("Seleziona il responsabile."); return; }
+        if (typeIntervention === 'Attrezzature' && !equipment) { alert("Seleziona l'attrezzatura."); return; }
+
+        Store.addItem('haccp_maintenance', {
+          date,
+          subject: typeIntervention === 'Attrezzature' ? equipment : 'Ambienti/Strutture',
+          typeIntervention,
+          description,
+          type: category,
+          externalCompany: category === 'Extraordinary' ? externalCompany : '',
+          operator
+        });
+
+        this.closeModal();
+        this.renderView('haccp_maintenance');
       };
     }
 
