@@ -39,10 +39,14 @@ const App = {
       const viewParam = urlParams.get('view');
       const idParam = urlParams.get('id');
 
-      if (viewParam && idParam) {
-          if(viewParam === 'trace_incoming_detail') {
+      if (viewParam) {
+          this.currentView = viewParam;
+          if (idParam) {
               this.currentRecordId = idParam;
-              this.currentView = viewParam;
+              // Specific handling for equipment detail if needed, though most detail views use currentRecordId
+              if (viewParam === 'haccp_temp_detail') {
+                  this.currentEqId = idParam;
+              }
           }
       }
       
@@ -4972,7 +4976,8 @@ const App = {
     `;
 
     // Generate QR Code
-    const qrText = window.location.origin + window.location.pathname + '#/production/' + lotto;
+    const baseUrl = window.location.href.split('?')[0];
+    const qrText = baseUrl + '?view=trace_production_detail&id=' + prodId;
     new QRCode(document.getElementById("qr-code-container"), {
       text: qrText,
       width: 120,
