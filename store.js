@@ -124,7 +124,7 @@ const Store = {
           'haccp_maintenance',
           'haccp_temp_equipments', 'workers', 'equipments', 
           'work_environments', 'detergents', 'suppliers', 
-          'ingredients', 'incoming_goods', 'recipes', 'productions'
+          'ingredients', 'incoming_goods', 'trace_shipments', 'recipes', 'productions'
         ];
         
         tables.forEach(table => {

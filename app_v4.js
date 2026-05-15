@@ -22,6 +22,9 @@ const App = {
   currentEqId: null,
   currentRecordId: null,
   tempRecipeIngredients: [],
+  tempIncomingItems: [],
+  tempShipmentPhoto: null,
+  incomingItemCounter: 0,
   
   init() {
     try {
@@ -53,6 +56,15 @@ const App = {
     }
   },
 
+  updateNav(view) {
+    document.querySelectorAll('.nav-item').forEach(item => {
+      item.classList.remove('active');
+      if (item.getAttribute('data-view') === view) {
+        item.classList.add('active');
+      }
+    });
+  },
+
   bindNavigation() {
     document.querySelectorAll('.nav-item').forEach(item => {
       item.addEventListener('click', (e) => {
@@ -74,6 +86,7 @@ const App = {
     const title = document.getElementById('page-title');
     
     main.innerHTML = ''; // Clear current
+    this.updateNav(view);
     
     try {
       switch(view) {
@@ -324,37 +337,7 @@ const App = {
       alert("Nessuna attrezzatura configurata.");
       return;
     }
-
-    const temp = prompt("Inserisci la temperatura standard per tutte le attrezzature (es. 4):", "4");
-    if (temp === null) return;
-    
-    const tempNum = parseFloat(temp.replace(',', '.'));
-    if (isNaN(tempNum)) {
-      alert("Temperatura non valida.");
-      return;
-    }
-
-    const operator = prompt("Inserisci il nome dell'operatore:");
-    if (!operator) return;
-
-    const today = new Date().toISOString().split('T')[0];
-    const time = new Date().toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
-
-    equipments.forEach(eq => {
-      const isConforme = tempNum >= eq.minTemp && tempNum <= eq.maxTemp;
-      Store.addItem('haccp_temperature', {
-        equipmentId: eq.id,
-        date: today,
-        time: time,
-        temp: tempNum,
-        operator: operator,
-        status: isConforme ? 'CONFORME' : 'NON CONFORME',
-        correctiveAction: isConforme ? '' : 'Temperatura fuori range rilevata durante check rapido.'
-      });
-    });
-
-    alert("Temperature registrate per tutti i frigoriferi.");
-    this.renderView('haccp_temp');
+    this.openModal('bulk-temp');
   },
 
   adjustIncomingStock(id) {
@@ -465,6 +448,14 @@ const App = {
     if(confirm("Sei sicuro di voler eliminare questa voce?")) {
       Store.removeItem(tableName, id);
       this.renderView(viewName || this.currentView);
+    }
+  },
+
+  removeItem(tableName, id, returnView) {
+    if(confirm("Sei sicuro di voler eliminare questo record?")) {
+      Store.removeItem(tableName, id);
+      if (returnView) this.renderView(returnView);
+      else this.renderView(this.currentView);
     }
   },
 
@@ -742,43 +733,58 @@ const App = {
         const nextWeek = new Date(now);
         nextWeek.setDate(now.getDate() + 7);
 
-        // find stock
-        const expiringIncoming = (Store.data.incoming_goods || []).map(g => {
-           const rawUsed = (Store.data.productions || []).filter(p => p.ingredients && p.ingredients.some(i => i.incomingId === g.id));
-           const totalUsed = rawUsed.reduce((acc, p) => acc + parseFloat(p.ingredients.find(i => i.incomingId === g.id).quantity || 0), 0);
-           const totalLost = (g.adjustments || []).reduce((acc, a) => acc + parseFloat(a.quantity || 0), 0);
-           let currentStock = parseFloat(g.quantity) - totalUsed - totalLost;
-           if (isNaN(currentStock)) currentStock = 0;
-           return { ...g, currentStock };
-        }).filter(g => g.currentStock > 0);
+        // find stock efficiently
+        const productions = Store.data.productions || [];
+        const usageMap = {};
+        
+        productions.forEach(p => {
+           if(p.ingredients) {
+              p.ingredients.forEach(ing => {
+                 if(ing.incomingId) {
+                    usageMap[ing.incomingId] = (usageMap[ing.incomingId] || 0) + (parseFloat(ing.quantity) || 0);
+                 }
+              });
+           }
+        });
 
-        const expiringItems = expiringIncoming.filter(g => new Date(g.expiry) <= nextWeek).map(g => {
-           const expDate = new Date(g.expiry);
-           expDate.setHours(0,0,0,0);
-           return {
-              id: g.id,
-              name: g.ingredientName,
-              date: g.expiry,
-              type: 'IN',
-              isExpired: expDate < now,
-              qty: g.currentStock,
-              unit: g.unit
-           };
+        const expiringIncoming = (Store.data.incoming_goods || []).map(g => {
+            const totalUsed = usageMap[g.id] || 0;
+            const totalLost = (g.adjustments || []).reduce((acc, a) => acc + (parseFloat(a.quantity) || 0), 0);
+            let currentStock = parseFloat(g.quantity) - totalUsed - totalLost;
+            if (isNaN(currentStock)) currentStock = 0;
+            
+            // Look up ingredient name
+            const ingInfo = (Store.data.ingredients || []).find(i => i.id === g.ingredientId);
+            return { ...g, currentStock, ingredientName: ingInfo ? ingInfo.name : 'Ingrediente sconosciuto' };
+        }).filter(g => g.currentStock > 0.001);
+
+        const expiringItems = expiringIncoming.filter(g => g.expiry && new Date(g.expiry) <= nextWeek).map(g => {
+            const expDate = new Date(g.expiry);
+            expDate.setHours(0,0,0,0);
+            return {
+               id: g.id,
+               name: g.ingredientName,
+               date: g.expiry,
+               type: 'IN',
+               isExpired: expDate < now,
+               qty: g.currentStock,
+               unit: g.unit
+            };
         });
 
         // find productions
-        const expiringProds = (Store.data.productions || []).filter(p => new Date(p.expiry) <= nextWeek).map(p => {
-           const expDate = new Date(p.expiry);
-           expDate.setHours(0,0,0,0);
-           return {
-              id: p.id,
-              name: `Prod: ${p.recipeName}`,
-              date: p.expiry,
-              type: 'OUT',
-              isExpired: expDate < now,
-              qty: parseFloat(p.quantityProduced) || 0,
-              unit: 'Pz/Kg'
-           };
+        const expiringProds = (Store.data.productions || []).filter(p => p.expiry && new Date(p.expiry) <= nextWeek).map(p => {
+            const expDate = new Date(p.expiry);
+            expDate.setHours(0,0,0,0);
+            return {
+               id: p.id,
+               name: `Prod: ${p.recipeName}`,
+               date: p.expiry,
+               type: 'OUT',
+               isExpired: expDate < now,
+               qty: parseFloat(p.quantityProduced) || 0,
+               unit: 'Pz/Kg'
+            };
         });
 
         const allExpiring = [...expiringItems, ...expiringProds].sort((a,b) => new Date(a.date) - new Date(b.date));
@@ -861,7 +867,7 @@ const App = {
                 const actionMap = {
                   'trace_incoming': { label: 'Carico Merci', icon: 'ph-truck', color: 'var(--primary-color)', onclick: "App.openModal('incoming')" },
                   'trace_production': { label: 'Produzione', icon: 'ph-cooking-pot', color: '#10b981', onclick: "App.openModal('production')" },
-                  'labels': { label: 'Etichette', icon: 'ph-tag', color: '#6366f1', onclick: "App.renderView('labels')" },
+                  'labels': { label: 'Etichette Produzioni', icon: 'ph-tag', color: '#6366f1', onclick: "App.renderView('labels')" },
                   'haccp_nc': { label: 'Segnala NC', icon: 'ph-warning', color: '#ef4444', onclick: "App.openModal('noncompliance')" },
                   'haccp_temp': { label: 'Temperature', icon: 'ph-thermometer-cold', color: '#3b82f6', onclick: "App.renderView('haccp_temp')" },
                   'haccp_sanitation': { label: 'Sanificazione', icon: 'ph-sparkle', color: '#10b981', onclick: "App.renderView('haccp_sanitation')" },
@@ -985,7 +991,7 @@ const App = {
         { id: 'trace_recipes', label: 'Ricettario', section: 'Tracciabilità' },
         { id: 'trace_suppliers', label: 'Fornitori', section: 'Tracciabilità' },
         { id: 'trace_ingredients', label: 'Magazzino', section: 'Tracciabilità' },
-        { id: 'labels', label: 'Etichette', section: 'Tracciabilità' }
+        { id: 'labels', label: 'Etichette Produzioni', section: 'Tracciabilità' }
       ];
 
       return `
@@ -1022,7 +1028,7 @@ const App = {
           
           <div style="margin-top: 16px; margin-bottom: 16px; display: flex; gap: 10px;">
              <button class="btn-primary" style="flex: 1;" onclick="App.openModal('new-temp-equipment')"><i class="ph ph-plus"></i> Nuova Attrezzatura</button>
-             <button class="btn-secondary" style="flex: 1; background: var(--primary-color); color: white;" onclick="App.bulkRecordTemperatures()"><i class="ph ph-check-square"></i> Registra tutto (1 click)</button>
+             <button class="btn-secondary" style="flex: 1; background: var(--primary-color); color: white;" onclick="App.bulkRecordTemperatures()"><i class="ph ph-check-square"></i> Registra Tutto</button>
           </div>
           
           ${tempEquipments.length > 0 ? tempEquipments.map(eq => {
@@ -1372,13 +1378,6 @@ const App = {
         <div class="card">
           <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.renderView('haccp')"><i class="ph ph-arrow-left"></i> Indietro</button>
           <h3><i class="ph-fill ph-house-line"></i> Ambienti e Strutture</h3>
-          <div style="background: rgba(0,122,255,0.05); padding: 12px; border-radius: 12px; margin-bottom: 20px;">
-            <label style="font-size: 11px; margin-bottom: 4px;">Frequenza di Controllo Programmata:</label>
-            <select style="font-size: 14px; padding: 8px;" onchange="App.updateStructureFrequency(this.value)">
-              <option value="Settimanale" ${Store.data.settings.structureFrequency === 'Settimanale' ? 'selected' : ''}>Settimanale (Alert ogni 7gg)</option>
-              <option value="Mensile" ${Store.data.settings.structureFrequency === 'Mensile' ? 'selected' : ''}>Mensile (Alert ogni mese)</option>
-            </select>
-          </div>
           <div style="margin-top: 16px; margin-bottom: 20px;">
             <button class="btn-primary" style="width: 100%;" onclick="App.openModal('structure')"><i class="ph ph-plus"></i> Nuovo Controllo</button>
           </div>
@@ -1698,17 +1697,19 @@ const App = {
             
             <div style="margin-bottom: 15px;">
               <p style="font-size: 13px; font-weight: 600; margin-bottom: 8px;">Fattura / DDT:</p>
-              ${g.photos?.ddt 
-                ? `<img src="${g.photos.ddt}" style="width: 100px; height: 100px; object-fit: cover; border-radius: 8px; cursor: zoom-in; border: 1px solid var(--border-color);" onclick="App.enlargeImage(this.src)" />`
+              ${(g.ddtPhoto || (g.photos && g.photos.ddt)) 
+                ? `<img src="${g.ddtPhoto || g.photos.ddt}" style="width: 100px; height: 100px; object-fit: cover; border-radius: 8px; cursor: zoom-in; border: 1px solid var(--border-color);" onclick="App.enlargeImage(this.src)" />`
                 : '<p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Nessuna foto DDT caricata.</p>'}
             </div>
 
             <div>
-              <p style="font-size: 13px; font-weight: 600; margin-bottom: 8px;">Etichette Lotto:</p>
+              <p style="font-size: 13px; font-weight: 600; margin-bottom: 8px;">Etichetta Lotto / Scadenza:</p>
               <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-                ${g.photos?.lot && g.photos.lot.length > 0 
-                  ? g.photos.lot.map(src => `<img src="${src}" style="width: 80px; height: 80px; object-fit: cover; border-radius: 8px; cursor: zoom-in; border: 1px solid var(--border-color);" onclick="App.enlargeImage(this.src)" />`).join('')
-                  : '<p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Nessuna foto lotto caricata.</p>'}
+                ${g.labelPhoto 
+                  ? `<img src="${g.labelPhoto}" style="width: 100px; height: 100px; object-fit: cover; border-radius: 8px; cursor: zoom-in; border: 1px solid var(--border-color);" onclick="App.enlargeImage(this.src)" />`
+                  : (g.photos && g.photos.lot && g.photos.lot.length > 0 
+                    ? g.photos.lot.map(src => `<img src="${src}" style="width: 80px; height: 80px; object-fit: cover; border-radius: 8px; cursor: zoom-in; border: 1px solid var(--border-color);" onclick="App.enlargeImage(this.src)" />`).join('')
+                    : '<p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Nessuna foto lotto caricata.</p>')}
               </div>
             </div>
           </div>
@@ -2003,21 +2004,36 @@ const App = {
     },
 
     trace_archive() {
-      const goods = Store.data.incoming_goods || [];
-      const filtered = goods.filter(g => g.docNumber).sort((a,b) => new Date(b.date) - new Date(a.date));
+      const shipments = Store.data.trace_shipments || [];
+      const sorted = shipments.sort((a,b) => new Date(b.date) - new Date(a.date));
+      
       return `
         <div class="card">
           <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.renderView('traceability')"><i class="ph ph-arrow-left"></i> Indietro</button>
-          <h3><i class="ph-fill ph-folder-open"></i> Archivio Documenti</h3>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h3><i class="ph-fill ph-folder-open"></i> Archivio DDT</h3>
+            <button class="btn-primary" style="width: auto; padding: 6px 12px; font-size: 12px;" onclick="App.openModal('incoming')">
+              <i class="ph ph-plus"></i> Nuovo Carico
+            </button>
+          </div>
+
           <div class="list-container">
-            ${filtered.length > 0 ? filtered.map(g => `
-              <div class="list-item">
-                <div>
-                  <div class="item-title">Doc. ${g.docNumber} del ${App.formatDate(g.date)}</div>
-                  <div class="item-subtitle">Fornitore: ${g.supplierName} - Articolo: ${g.ingredientName}</div>
+            ${sorted.length > 0 ? sorted.map(s => `
+              <div class="list-item" style="padding: 12px; display: flex; align-items: center; gap: 15px;">
+                <div style="width: 45px; height: 45px; background: var(--bg-body); border-radius: 8px; display: flex; align-items: center; justify-content: center; overflow: hidden; border: 1px solid var(--border-color); cursor: pointer;" onclick="App.enlargeImage('${s.ddtPhoto}')">
+                  <img src="${s.ddtPhoto}" style="width: 100%; height: 100%; object-fit: cover;" />
+                </div>
+                <div style="flex: 1;">
+                  <div class="item-title" style="font-weight: 700; font-family: monospace; font-size: 13px; color: var(--primary-color);">${s.fileName || 'Documento_Senza_Nome'}.jpg</div>
+                  <div class="item-subtitle">Fornitore: <strong>${s.supplierName}</strong></div>
+                  <div class="item-subtitle">Caricato il: ${App.formatDate(s.date)}</div>
+                </div>
+                <div style="display: flex; gap: 8px;">
+                   <i class="ph ph-eye" style="color: var(--primary-color); cursor: pointer; font-size: 20px;" onclick="App.enlargeImage('${s.ddtPhoto}')"></i>
+                   <i class="ph ph-trash" style="color: var(--danger-color); cursor: pointer; font-size: 20px;" onclick="App.removeItem('trace_shipments', '${s.id}', 'trace_archive')"></i>
                 </div>
               </div>
-            `).join('') : '<p style="text-align: center; color: var(--text-secondary);">Nessun documento in archivio.</p>'}
+            `).join('') : '<p style="text-align: center; color: var(--text-secondary); padding: 40px 0;">L\'archivio è vuoto. I documenti caricati appariranno qui.</p>'}
           </div>
         </div>
       `;
@@ -2028,8 +2044,8 @@ const App = {
       return `
         <div class="card">
           <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.renderView('traceability')"><i class="ph ph-arrow-left"></i> Indietro</button>
-          <h3><i class="ph-fill ph-qr-code"></i> Generazione Etichetta</h3>
-          <p>Seleziona una produzione per generare l'etichetta a norma (Reg. 1169/2011).</p>
+          <h3><i class="ph-fill ph-tag"></i> Etichette Produzioni</h3>
+          <p>Seleziona una produzione per generare l'etichetta a norma <strong>Reg. UE 1169/2011</strong>.</p>
           
           <div class="form-group" style="margin-top: 16px;">
             <label><i class="ph ph-cooking-pot"></i> Seleziona Produzione</label>
@@ -2273,7 +2289,6 @@ const App = {
           <button class="btn-primary" onclick="App.saveModelConfig('${moduleId}')"><i class="ph ph-floppy-disk"></i> Salva Configurazione</button>
         </div>
       `;
-    },
     },
 
     settings_equipments() {
@@ -3271,12 +3286,6 @@ const App = {
             <input type="number" step="0.1" id="form-eq-max" value="4" />
           </div>
         </div>
-        <div class="form-group">
-          <label>Frequenza di Controllo</label>
-          <select id="form-eq-freq">
-            <option value="Giornaliera">Giornaliera</option>
-            <option value="Bisantimanale">Bisettimanale</option>
-          </select>
         </div>
       `;
       saveBtn.onclick = () => {
@@ -3288,8 +3297,7 @@ const App = {
           locationId: envId,
           locationName: envName,
           minTemp: parseFloat(document.getElementById('form-eq-min').value),
-          maxTemp: parseFloat(document.getElementById('form-eq-max').value),
-          frequency: document.getElementById('form-eq-freq').value
+          maxTemp: parseFloat(document.getElementById('form-eq-max').value)
         });
         this.closeModal();
         this.renderView(this.currentView);
@@ -3584,6 +3592,98 @@ const App = {
       };
     }
     
+    if (type === 'bulk-temp') {
+      title.innerHTML = '<i class="ph-fill ph-check-square"></i> Registra Tutte le Temperature';
+      const equipments = Store.data.haccp_temp_equipments || [];
+      const eligibleOperators = App.getEligibleOperators('temperature');
+      const today = new Date().toISOString().split('T')[0];
+      const time = new Date().toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+
+      body.innerHTML = `
+        <div class="form-group">
+          <label>Data Registrazione</label>
+          <input type="date" id="bulk-date" value="${today}" />
+        </div>
+        <div class="form-group">
+          <label>Responsabile (Firma)</label>
+          <select id="bulk-operator">
+            <option value="">-- Seleziona Operatore --</option>
+            ${eligibleOperators.map(w => `<option value="${w.firstName} ${w.lastName}">${w.firstName} ${w.lastName}</option>`).join('')}
+          </select>
+        </div>
+        
+        <h4 style="margin-top: 20px; margin-bottom: 10px; font-size: 14px;">Attrezzature (${equipments.length})</h4>
+        <div class="bulk-temp-list" style="max-height: 400px; overflow-y: auto; padding-right: 5px;">
+          ${equipments.map((eq, idx) => `
+            <div class="card" style="margin-bottom: 10px; padding: 12px; border: 1px solid var(--border-color); background: var(--bg-body);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                <div style="font-weight: 700; font-size: 14px;">${eq.name}</div>
+                <div style="font-size: 11px; color: var(--text-secondary);">${eq.minTemp}°C / ${eq.maxTemp}°C</div>
+              </div>
+              <div style="display: flex; gap: 10px; align-items: center;">
+                <input type="number" step="0.1" class="bulk-temp-input" data-eq-id="${eq.id}" placeholder="Temp." style="flex: 1; padding: 10px; border-radius: 8px; border: 1px solid var(--border-color); font-size: 16px; font-weight: bold; text-align: center;" />
+                <span style="font-weight: bold; color: var(--text-secondary);">°C</span>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+
+      saveBtn.onclick = () => {
+        const date = document.getElementById('bulk-date').value;
+        const operator = document.getElementById('bulk-operator').value;
+        if (!operator) { alert("Seleziona l'operatore."); return; }
+
+        const inputs = document.querySelectorAll('.bulk-temp-input');
+        let savedCount = 0;
+
+        inputs.forEach(input => {
+          const val = input.value.trim();
+          if (val !== "") {
+            const temp = parseFloat(val.replace(',', '.'));
+            if (!isNaN(temp)) {
+              const eqId = input.dataset.eqId;
+              const eq = equipments.find(e => e.id === eqId);
+              const isConform = temp >= eq.minTemp && temp <= eq.maxTemp;
+              
+              Store.addItem('haccp_temperature', {
+                equipmentId: eq.id,
+                equipmentName: eq.name,
+                equipmentLocation: eq.locationName,
+                equipmentRange: `${eq.minTemp}°C / ${eq.maxTemp}°C`,
+                date: date,
+                time: time,
+                temp: temp,
+                operator: operator,
+                status: isConform ? 'CONFORME' : 'NON CONFORME',
+                correctiveAction: isConform ? '' : 'Registrazione massiva fuori range',
+                type: 'rilevamento'
+              });
+
+              if (!isConform) {
+                Store.addItem('haccp_noncompliance', {
+                  date: date,
+                  description: `Temperatura fuori range in ${eq.name} (${temp}°C) durante registrazione rapida.`,
+                  correctiveAction: 'Verifica immediata attrezzatura',
+                  operator: operator,
+                  closedAt: date
+                });
+              }
+              savedCount++;
+            }
+          }
+        });
+
+        if (savedCount === 0) {
+          alert("Inserisci almeno una temperatura.");
+          return;
+        }
+
+        this.closeModal();
+        this.renderView('haccp_temp');
+      };
+    }
+    
     if (type === 'edit-sanitation') {
       const recId = extraArg;
       const rec = Store.data.haccp_sanitation.find(r => r.id === recId);
@@ -3794,95 +3894,128 @@ const App = {
     if (type === 'incoming') {
       title.innerHTML = '<i class="ph-fill ph-truck"></i> Nuovo Carico Merci';
       const ingredients = Store.data.ingredients || [];
+      const suppliers = Store.data.suppliers || [];
       const today = new Date().toISOString().split('T')[0];
-      App.tempIncomingPhotos = { ddt: null, lot: [] };
+      
+      this.tempIncomingItems = [];
+      this.tempShipmentPhoto = null;
 
       body.innerHTML = `
-        <div class="form-group">
-          <label>Data di Carico</label>
-          <input type="date" id="inc-date" value="${today}" />
-        </div>
+        <div style="background: var(--bg-body); padding: 15px; border-radius: 12px; margin-bottom: 20px; border: 1px solid var(--border-color);">
+          <h4 style="margin-bottom: 12px; font-size: 14px; color: var(--primary-color);"><i class="ph-fill ph-file-text"></i> Dati Generali (Fattura/DDT)</h4>
+          <div class="form-group">
+            <label>Data di Carico</label>
+            <input type="date" id="inc-date" value="${today}" />
+          </div>
 
-        <div class="form-group">
-          <label>Seleziona Ingrediente</label>
-          <select id="inc-ingredient" onchange="App.updateSupplierFilter()">
-            <option value="">-- Scegli Ingrediente --</option>
-            ${ingredients.map(i => `<option value="${i.id}">${i.name}</option>`).join('')}
-          </select>
-        </div>
+          <div class="form-group">
+            <label>Fornitore</label>
+            <select id="inc-supplier">
+              <option value="">-- Seleziona Fornitore --</option>
+              ${suppliers.map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
+            </select>
+          </div>
 
-        <div class="form-group">
-          <label>Fornitore</label>
-          <select id="inc-supplier">
-            <option value="">-- Seleziona prima l'ingrediente --</option>
-          </select>
-          <p id="sup-filter-msg" style="font-size: 11px; color: var(--text-secondary); margin-top: 4px; display: none;">Nessun fornitore attivo trovato per questo ingrediente.</p>
-        </div>
-
-        <div class="form-group">
-          <label>Quantità Ricevuta</label>
-          <div style="display: flex; gap: 8px;">
-            <input type="number" id="inc-qty" step="0.01" placeholder="0,00" style="flex: 1;" />
-            <span id="inc-unit" style="padding: 10px; background: #eee; border-radius: 8px; font-weight: 600;">-</span>
+          <div class="form-group">
+            <label>Foto Fattura / DDT</label>
+            <input type="file" id="capture-ddt" accept="image/*" capture="environment" style="display: none;" onchange="App.handleShipmentPhoto(this)" />
+            <button class="btn-secondary" onclick="document.getElementById('capture-ddt').click()" style="width: 100%;"><i class="ph ph-camera"></i> Scatta Foto Documento</button>
+            <div id="preview-ddt" style="margin-top: 10px; display: none; text-align: center;">
+              <img id="img-preview-ddt" src="" style="max-height: 100px; border-radius: 8px; border: 1px solid var(--border-color); cursor: pointer;" onclick="App.enlargeImage(this.src)" />
+              <p style="font-size: 10px; color: var(--success-color); margin-top: 4px;"><i class="ph ph-check"></i> Documento Acquisito</p>
+            </div>
           </div>
         </div>
 
-        <div class="dashboard-grid" style="grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px;">
-          <div style="background: rgba(0,0,0,0.02); padding: 12px; border-radius: 12px; border: 1px dashed var(--border-color); text-align: center;">
-            <label style="font-size: 11px; text-transform: uppercase; display: block; margin-bottom: 8px;">Foto Fattura/DDT</label>
-            <input type="file" id="capture-ddt" accept="image/*" capture="environment" style="display: none;" onchange="App.handlePhoto(this, 'ddt')" />
-            <button class="btn-secondary" onclick="document.getElementById('capture-ddt').click()" style="width: 100%;"><i class="ph ph-camera"></i> Foto</button>
-            <div id="preview-ddt" style="margin-top: 8px; font-size: 10px; color: var(--success-color); display: none;"><i class="ph ph-check"></i> Acquisita</div>
-          </div>
-
-          <div style="background: rgba(0,0,0,0.02); padding: 12px; border-radius: 12px; border: 1px dashed var(--border-color); text-align: center;">
-            <label style="font-size: 11px; text-transform: uppercase; display: block; margin-bottom: 8px;">Foto Lotto</label>
-            <input type="file" id="capture-lot" accept="image/*" capture="environment" style="display: none;" onchange="App.handlePhoto(this, 'lot')" multiple />
-            <button class="btn-secondary" onclick="document.getElementById('capture-lot').click()" style="width: 100%;"><i class="ph ph-camera"></i> Foto (+)</button>
-            <div id="preview-lot-count" style="margin-top: 8px; font-size: 10px; color: var(--success-color); display: none;"><i class="ph ph-check"></i> <span id="lot-count-val">0</span> Foto</div>
-          </div>
+        <div style="margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
+          <h4 style="font-size: 14px; color: var(--text-primary);"><i class="ph-fill ph-package"></i> Prodotti nel Carico</h4>
+          <button class="btn-primary" style="width: auto; padding: 6px 12px; font-size: 12px;" onclick="App.addIncomingItemRow()">
+            <i class="ph ph-plus"></i> Aggiungi Prodotto
+          </button>
         </div>
 
-        <div class="form-group" style="margin-top: 20px;">
-          <label>Data di Scadenza / TMC</label>
-          <input type="date" id="inc-expiry" />
+        <div id="incoming-items-container">
+          <!-- Item rows will be injected here -->
         </div>
       `;
 
+      this.incomingItemCounter = 0;
+      // Add first row by default
+      setTimeout(() => this.addIncomingItemRow(), 50);
+
       saveBtn.onclick = () => {
-        const date = document.getElementById('inc-date').value || new Date().toISOString().split('T')[0];
-        const ingredientId = document.getElementById('inc-ingredient').value;
+        const date = document.getElementById('inc-date').value || today;
         const supplierId = document.getElementById('inc-supplier').value;
-        const quantity = parseFloat(document.getElementById('inc-qty').value);
-        const expiry = document.getElementById('inc-expiry').value;
+        const ddtPhoto = this.tempShipmentPhoto;
 
-        if(!ingredientId || !supplierId || isNaN(quantity) || !expiry) { alert("Compila tutti i campi obbligatori."); return; }
+        if(!supplierId) { alert("Seleziona il fornitore."); return; }
+        if(!ddtPhoto) { alert("Scatta la foto della fattura o del DDT."); return; }
+        
+        const itemRows = document.querySelectorAll('.incoming-item-row');
+        if(itemRows.length === 0) { alert("Aggiungi almeno un prodotto."); return; }
 
-        const ing = ingredients.find(i => i.id === ingredientId);
-        const sup = (Store.data.suppliers || []).find(s => s.id === supplierId);
+        const shipmentId = 'SH-' + Date.now();
+        const sup = suppliers.find(s => s.id === supplierId);
 
-        const goods = Store.data.incoming_goods || [];
-        const maxLot = goods.reduce((max, g) => {
-            const num = parseInt(g.lotInterno);
-            return (!isNaN(num) && num > max) ? num : max;
-        }, 0);
-        const lotInterno = (maxLot + 1).toString();
+        const fileName = `${sup.name.replace(/\s+/g, '_')}_${date.split('-').reverse().join('_')}`;
 
-        Store.addItem('incoming_goods', {
+        // Save Shipment (Parent)
+        Store.addItem('trace_shipments', {
+          id: shipmentId,
           date,
-          lotInterno,
-          ingredientId,
-          ingredientName: ing.name,
           supplierId,
           supplierName: sup.name,
-          quantity,
-          unit: ing.unit,
-          expiry,
-          photos: App.tempIncomingPhotos
+          fileName: fileName,
+          ddtPhoto,
+          createdAt: new Date().toISOString()
         });
 
+        // Save Items (Children)
+        let savedCount = 0;
+        itemRows.forEach((row) => {
+          const ingSelect = row.querySelector('.item-ing');
+          const idx = ingSelect.dataset.idx;
+          const ingId = ingSelect.value;
+          const qty = parseFloat(row.querySelector('.item-qty').value);
+          const expiry = row.querySelector('.item-expiry').value;
+          const labelPhoto = this.tempIncomingItems[idx] ? this.tempIncomingItems[idx].photo : null;
+
+          if(ingId && !isNaN(qty) && expiry) {
+            const ing = ingredients.find(i => i.id === ingId);
+            
+            // Generate Internal Lot
+            const goods = Store.data.incoming_goods || [];
+            const maxLot = goods.reduce((max, g) => {
+                const num = parseInt(g.lotInterno);
+                return (!isNaN(num) && num > max) ? num : max;
+            }, 0);
+            const lotInterno = (maxLot + 1).toString();
+
+            Store.addItem('incoming_goods', {
+              shipmentId,
+              date,
+              lotInterno,
+              ingredientId: ingId,
+              ingredientName: ing.name,
+              supplierId,
+              supplierName: sup.name,
+              quantity: qty,
+              unit: ing.unit,
+              expiry,
+              labelPhoto, // Specific for this item
+              ddtPhoto // Also keep a copy for legacy views or ease of access
+            });
+            savedCount++;
+          }
+        });
+
+        if(savedCount === 0) {
+          alert("Inserisci i dati dei prodotti (ingrediente, quantità e scadenza).");
+          return;
+        }
+
         this.closeModal();
-        this.renderView('trace_incoming');
+        this.renderView('trace_archive');
       };
     }
 
@@ -4155,7 +4288,9 @@ const App = {
         this.closeModal();
         this.renderView('trace_production');
       };
+    }
 
+    if (type === 'noncompliance') {
       title.innerHTML = '<i class="ph-fill ph-warning"></i> Nuova Non Conformità';
       const eligible = App.getEligibleOperators('nonconformita');
       const today = new Date().toISOString().split('T')[0];
@@ -4418,6 +4553,44 @@ const App = {
       };
     }
 
+    if (type === 'label-pre-print') {
+      const prodId = extraArg;
+      title.innerHTML = '<i class="ph ph-printer"></i> Configurazione Etichetta';
+      
+      body.innerHTML = `
+        <div class="form-group">
+          <label>Peso Netto (g) *</label>
+          <input type="number" id="label-weight" placeholder="es. 250" />
+        </div>
+        <div class="form-group">
+          <label>Modalità di Conservazione</label>
+          <select id="label-storage">
+            <option value="Conservare in luogo fresco e asciutto.">Conservare in luogo fresco e asciutto.</option>
+            <option value="Conservare in frigorifero da 0°C a +4°C.">Conservare in frigorifero da 0°C a +4°C.</option>
+            <option value="Conservare in congelatore a -18°C. Una volta scongelato, il prodotto non deve essere ricongelato.">Conservare in congelatore a -18°C. Una volta scongelato, il prodotto non deve essere ricongelato.</option>
+            <option value="Dopo l'apertura conservare in frigorifero e consumare entro 2-3 giorni.">Dopo l'apertura conservare in frigorifero e consumare entro 2-3 giorni.</option>
+            <option value="Conservare al riparo dalla luce diretta e da fonti di calore.">Conservare al riparo dalla luce diretta e da fonti di calore.</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Note / Istruzioni aggiuntive (Libero)</label>
+          <input type="text" id="label-storage-notes" placeholder="es. Consumare previa cottura" />
+        </div>
+      `;
+      
+      saveBtn.innerHTML = '<i class="ph ph-check"></i> Conferma e Anteprima';
+      saveBtn.onclick = () => {
+        const weight = document.getElementById('label-weight').value;
+        const storage = document.getElementById('label-storage').value;
+        const notes = document.getElementById('label-storage-notes').value;
+        
+        if(!weight) { alert("Inserisci il peso in grammi."); return; }
+        
+        this.closeModal();
+        this.generateLabelPreview(prodId, { weight, storage, notes });
+      };
+    }
+
     modal.classList.add('active');
   },
 
@@ -4491,13 +4664,105 @@ const App = {
           App.tempIncomingPhotos.ddt = base64;
           document.getElementById('preview-ddt').style.display = 'block';
         } else {
+          if (!App.tempIncomingPhotos.lot) App.tempIncomingPhotos.lot = [];
           App.tempIncomingPhotos.lot.push(base64);
-          document.getElementById('preview-lot-count').style.display = 'block';
-          document.getElementById('lot-count-val').innerText = App.tempIncomingPhotos.lot.length;
+          const preview = document.getElementById('preview-lot-count');
+          if(preview) {
+             preview.style.display = 'block';
+             document.getElementById('lot-count-val').innerText = App.tempIncomingPhotos.lot.length;
+          }
         }
       };
       reader.readAsDataURL(files[i]);
     }
+  },
+
+  handleShipmentPhoto(input) {
+    const file = input.files[0];
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      this.tempShipmentPhoto = e.target.result;
+      document.getElementById('img-preview-ddt').src = e.target.result;
+      document.getElementById('preview-ddt').style.display = 'block';
+    };
+    reader.readAsDataURL(file);
+  },
+
+  handleItemPhoto(input, index) {
+    const file = input.files[0];
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      if(!this.tempIncomingItems[index]) this.tempIncomingItems[index] = {};
+      this.tempIncomingItems[index].photo = e.target.result;
+      const preview = document.getElementById(`preview-item-photo-${index}`);
+      preview.src = e.target.result;
+      preview.style.display = 'block';
+      document.getElementById(`btn-label-photo-${index}`).innerHTML = '<i class="ph ph-check"></i> Foto OK';
+      document.getElementById(`btn-label-photo-${index}`).classList.replace('btn-secondary', 'btn-success');
+    };
+    reader.readAsDataURL(file);
+  },
+
+  addIncomingItemRow() {
+    const container = document.getElementById('incoming-items-container');
+    const index = this.incomingItemCounter++;
+    const ingredients = Store.data.ingredients || [];
+    
+    const row = document.createElement('div');
+    row.className = 'incoming-item-row card';
+    row.style.padding = '15px';
+    row.style.marginBottom = '15px';
+    row.style.border = '1px solid var(--border-color)';
+    row.style.position = 'relative';
+    row.style.background = 'white';
+
+    row.innerHTML = `
+      <div style="position: absolute; top: 5px; right: 5px; z-index: 10;">
+        <button class="btn-icon" onclick="this.closest('.incoming-item-row').remove()" style="color: var(--danger-color); padding: 4px;">
+          <i class="ph ph-x-circle" style="font-size: 18px;"></i>
+        </button>
+      </div>
+
+      <div class="form-group">
+        <label style="font-size: 11px;">Dettaglio Prodotto</label>
+        <select class="item-ing" data-idx="${index}" onchange="App.updateItemUnit(this, ${index})">
+          <option value="">-- Seleziona Prodotto --</option>
+          ${ingredients.map(i => `<option value="${i.id}">${i.name}</option>`).join('')}
+        </select>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+        <div class="form-group">
+          <label style="font-size: 11px;">Quantità (<span class="item-unit-label">-</span>)</label>
+          <input type="number" class="item-qty" step="0.01" placeholder="0,00" />
+        </div>
+        <div class="form-group">
+          <label style="font-size: 11px;">Scadenza / TMC</label>
+          <input type="date" class="item-expiry" />
+        </div>
+      </div>
+
+      <div class="form-group" style="margin-bottom: 0;">
+        <input type="file" id="capture-label-${index}" accept="image/*" capture="environment" style="display: none;" onchange="App.handleItemPhoto(this, ${index})" />
+        <div style="display: flex; gap: 10px; align-items: center;">
+          <button id="btn-label-photo-${index}" class="btn-secondary" onclick="document.getElementById('capture-label-${index}').click()" style="flex: 1; font-size: 12px; height: 36px; padding: 0;">
+            <i class="ph ph-camera"></i> Foto Etichetta/Lotto
+          </button>
+          <img id="preview-item-photo-${index}" src="" style="display: none; height: 36px; width: 36px; border-radius: 4px; object-fit: cover; border: 1px solid var(--border-color); cursor: pointer;" onclick="App.enlargeImage(this.src)" />
+        </div>
+      </div>
+    `;
+    container.appendChild(row);
+  },
+
+  updateItemUnit(select, index) {
+    const ingId = select.value;
+    const ing = Store.data.ingredients.find(i => i.id === ingId);
+    const label = select.closest('.incoming-item-row').querySelector('.item-unit-label');
+    if(ing) label.innerText = ing.unit;
+    else label.innerText = '-';
   },
 
   enlargeImage(src) {
@@ -4630,11 +4895,11 @@ const App = {
         return;
       }
 
-      this.generateLabelPreview(prodId);
+      this.openModal('label-pre-print', prodId);
     });
   },
 
-  generateLabelPreview(prodId) {
+  generateLabelPreview(prodId, extraData) {
     const prod = (Store.data.productions || []).find(p => p.id === prodId);
     if(!prod) return;
 
@@ -4644,8 +4909,13 @@ const App = {
       return;
     }
 
+    const company = Store.data.company || {};
+    const osaText = `${company.ragioneSociale || ''} - ${company.sedeOperativa || company.sedeLegale || ''}`;
+
     const expiryFormatted = App.formatDate(prod.expiry);
     const lotto = prod.lot;
+    const isExpiry = (prod.expiryType === 'Scadenza' || prod.labelType === 'Scadenza'); // Simplified logic
+    const expiryWording = isExpiry ? "Da consumarsi entro il" : "Da consumarsi preferibilmente entro il";
 
     // Elabora ingredienti: ordine decrescente, formatta allergeni
     const ingredients = recipe.ingredients.map(ing => {
@@ -4667,23 +4937,38 @@ const App = {
       return text;
     }).join(', ');
 
+    const storageText = extraData.notes ? `${extraData.storage} ${extraData.notes}` : extraData.storage;
+
     const container = document.getElementById('label-result-container');
     container.style.display = 'block';
     container.innerHTML = `
-      <div class="label-preview" id="label-html">
-        <div class="label-title">${prod.recipeName}</div>
-        <div class="label-ingredients">
-          <strong>Ingredienti:</strong> ${ingString}.
+      <div class="card" style="margin-top: 20px; border: 2px solid var(--primary-color);">
+        <div class="label-preview" id="label-html" style="padding: 20px; background: white; border-radius: 8px;">
+          <div class="label-title" style="text-align: center; font-size: 20px; font-weight: 800; margin-bottom: 15px; text-transform: uppercase;">${prod.recipeName}</div>
+          
+          <div class="label-ingredients" style="font-size: 13px; line-height: 1.4; margin-bottom: 15px;">
+            <strong>Ingredienti:</strong> ${ingString}.
+          </div>
+          
+          <div style="font-size: 13px; margin-bottom: 15px;">
+             <strong>Peso Netto:</strong> ${extraData.weight} g<br>
+             <strong>Modalità di conservazione:</strong> ${storageText}<br>
+             <strong>Lotto:</strong> ${lotto}<br>
+             <strong>${expiryWording}:</strong> ${expiryFormatted}
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: flex-end;">
+            <div style="font-size: 10px; color: var(--text-secondary); max-width: 60%;">
+              Prodotto da:<br>${osaText}
+            </div>
+            <div class="label-qr" id="qr-code-container"></div>
+          </div>
         </div>
-        <div style="font-size:12px; margin-top:8px;">
-           <strong>Lotto:</strong> ${lotto}<br>
-           <strong>Da consumarsi preferibilmente entro il:</strong> ${expiryFormatted}
-        </div>
-        <div class="label-qr" id="qr-code-container"></div>
+        
+        <button class="btn-primary" style="margin-top: 20px; width: 100%;" onclick="App.exportLabelPDF('${prod.recipeName.replace(/'/g, "\\'")}', '${ingString.replace(/<[^>]*>?/gm, '').replace(/'/g, "\\'")}', '${lotto}', '${expiryFormatted}', '${extraData.weight}', '${storageText.replace(/'/g, "\\'")}', '${expiryWording}', '${osaText.replace(/'/g, "\\'")}')">
+          <i class="ph ph-printer"></i> Stampa Etichetta Reg. 1169/2011 (PDF)
+        </button>
       </div>
-      <button class="btn-primary" style="margin-top: 16px;" onclick="App.exportLabelPDF('${prod.recipeName.replace(/'/g, "\\'")}', '${ingString.replace(/<[^>]*>?/gm, '').replace(/'/g, "\\'")}', '${lotto}', '${expiryFormatted}')">
-        <i class="ph ph-printer"></i> Stampa Etichetta PDF
-      </button>
     `;
 
     // Generate QR Code
@@ -4831,12 +5116,17 @@ const App = {
     const settings = Store.data.settings || {};
     const applyModel = settings.applyModelNumber !== undefined ? settings.applyModelNumber : true;
     
+    const modelConfigs = settings.model_configs || {};
     let modelText = "";
-    if (tableName === 'haccp_temperature') modelText = settings.modelTemperature || 'MOD-TEMP Rev.0';
-    else if (tableName === 'haccp_sanitation') modelText = settings.modelSanitation || 'MOD-SAN Rev.0';
-    else if (tableName === 'haccp_hygiene') modelText = settings.modelHygiene || 'MOD-HYG Rev.0';
-    else if (tableName === 'haccp_noncompliance') modelText = settings.modelNonCompliance || 'MOD-NC Rev.0';
-    else modelText = settings.modelGeneric || 'MOD-GEN Rev.0';
+    
+    if (tableName === 'haccp_temperature') modelText = modelConfigs['haccp_temperature']?.model || settings.modelTemperature || 'MOD-TEMP Rev.0';
+    else if (tableName === 'haccp_sanitation') modelText = modelConfigs['haccp_sanitation']?.model || settings.modelSanitation || 'MOD-SAN Rev.0';
+    else if (tableName === 'haccp_hygiene') modelText = modelConfigs['haccp_hygiene']?.model || settings.modelHygiene || 'MOD-HYG Rev.0';
+    else if (tableName === 'haccp_noncompliance') modelText = modelConfigs['haccp_noncompliance']?.model || settings.modelNonCompliance || 'MOD-NC Rev.0';
+    else if (tableName === 'haccp_structure') modelText = modelConfigs['haccp_structure']?.model || settings.modelStructure || 'MOD-STR Rev.0';
+    else if (tableName === 'trace_incoming') modelText = modelConfigs['trace_incoming']?.model || 'MOD-CAR Rev.0';
+    else if (tableName === 'trace_production') modelText = modelConfigs['trace_production']?.model || 'MOD-PROD Rev.0';
+    else modelText = modelConfigs[tableName]?.model || settings.modelGeneric || 'MOD-GEN Rev.0';
     
     if (!applyModel) modelText = "";
 
@@ -4904,8 +5194,8 @@ const App = {
     doc.text(titleText, 14, 30);
 
     const settings = Store.data.settings || {};
-    const applyModel = settings.applyModelNumber !== undefined ? settings.applyModelNumber : true;
-    let modelText = settings.modelSanitation || "MOD-SAN Rev.0";
+    const modelConfigs = settings.model_configs || {};
+    let modelText = modelConfigs['haccp_sanitation']?.model || settings.modelSanitation || "MOD-SAN Rev.0";
     if (!applyModel) modelText = "";
 
     let records = Store.data.haccp_sanitation || [];
@@ -5008,8 +5298,8 @@ const App = {
     doc.text(titleText, 14, 30);
 
     const settings = Store.data.settings || {};
-    const applyModel = settings.applyModelNumber !== undefined ? settings.applyModelNumber : true;
-    let modelText = settings.modelTemperature || "MOD-TEMP Rev.0";
+    const modelConfigs = settings.model_configs || {};
+    let modelText = modelConfigs['haccp_temperature']?.model || settings.modelTemperature || "MOD-TEMP Rev.0";
     if (!applyModel) modelText = "";
 
     let records = Store.data.haccp_temperature || [];
@@ -5070,8 +5360,8 @@ const App = {
     const { jsPDF } = window.jspdf;
     
     const settings = Store.data.settings || {};
-    const applyModel = settings.applyModelNumber !== undefined ? settings.applyModelNumber : true;
-    let modelText = settings.modelHygiene || "MOD-HYG Rev.0";
+    const modelConfigs = settings.model_configs || {};
+    let modelText = modelConfigs['haccp_hygiene']?.model || settings.modelHygiene || "MOD-HYG Rev.0";
     if (!applyModel) modelText = "";
 
     let rawRecords = Store.data.haccp_hygiene || [];
@@ -5262,8 +5552,8 @@ const App = {
     const doc = new jsPDF('landscape');
     
     const settings = Store.data.settings || {};
-    const applyModel = settings.applyModelNumber !== undefined ? settings.applyModelNumber : true;
-    let modelText = settings.modelNonCompliance || "MOD-NC Rev.0";
+    const modelConfigs = settings.model_configs || {};
+    let modelText = modelConfigs['haccp_noncompliance']?.model || settings.modelNonCompliance || "MOD-NC Rev.0";
     if (!applyModel) modelText = "";
 
     let rawRecords = Store.data.haccp_noncompliance || [];
@@ -5331,8 +5621,8 @@ const App = {
     const doc = new jsPDF('portrait');
     
     const settings = Store.data.settings || {};
-    const applyModel = settings.applyModelNumber !== undefined ? settings.applyModelNumber : true;
-    let modelText = settings.modelStructure || "MOD-STR Rev.0";
+    const modelConfigs = settings.model_configs || {};
+    let modelText = modelConfigs['haccp_structure']?.model || settings.modelStructure || "MOD-STR Rev.0";
     if (!applyModel) modelText = "";
 
     let rawRecords = Store.data.haccp_structure || [];
@@ -5397,7 +5687,7 @@ const App = {
     doc.save(`registro_ambienti_strutture.pdf`);
   },
 
-  exportLabelPDF(name, ingredientsText, lot, expiry) {
+  exportLabelPDF(name, ingredientsText, lot, expiry, weight, storage, expiryWording, osa) {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({
       orientation: "portrait",
@@ -5407,29 +5697,51 @@ const App = {
 
     const settings = Store.data.settings || {};
     const applyModel = settings.applyModelNumber !== undefined ? settings.applyModelNumber : true;
-    const modelText = settings.modelNumber || "MOD-001 Rev.0";
+    const modelText = settings.modelNumber || "MOD-ETI Rev.0";
 
+    // Header - Nome Prodotto
     doc.setFontSize(16);
     doc.setFont("helvetica", "bold");
-    doc.text(name, 50, 15, { align: "center" });
+    doc.text(name.toUpperCase(), 50, 12, { align: "center" });
     
+    // Body - Ingredienti
     doc.setFontSize(9);
     doc.setFont("helvetica", "normal");
     const splitIngredients = doc.splitTextToSize(`Ingredienti: ${ingredientsText}`, 90);
-    doc.text(splitIngredients, 5, 25);
+    doc.text(splitIngredients, 5, 22);
 
-    doc.text(`Lotto: ${lot}`, 5, 55);
-    doc.text(`TMC: ${expiry}`, 5, 62);
+    // Dati Variabili
+    let currentY = 22 + (splitIngredients.length * 4) + 5;
+    doc.setFontSize(10);
+    doc.text(`Peso Netto: ${weight} g`, 5, currentY);
+    currentY += 5;
+    
+    doc.setFontSize(9);
+    const splitStorage = doc.splitTextToSize(`Conservazione: ${storage}`, 90);
+    doc.text(splitStorage, 5, currentY);
+    currentY += (splitStorage.length * 4) + 2;
 
+    doc.setFont("helvetica", "bold");
+    doc.text(`Lotto: ${lot}`, 5, currentY);
+    currentY += 5;
+    doc.text(`${expiryWording}: ${expiry}`, 5, currentY);
+
+    // QR Code
     const canvas = document.querySelector("#qr-code-container canvas");
     if(canvas) {
       const imgData = canvas.toDataURL("image/png");
-      doc.addImage(imgData, 'PNG', 35, 68, 30, 30);
+      doc.addImage(imgData, 'PNG', 65, currentY - 5, 25, 25);
     }
+
+    // Footer - OSA
+    doc.setFontSize(7);
+    doc.setFont("helvetica", "italic");
+    doc.text(`Prodotto da: ${osa}`, 5, 92);
 
     if(applyModel && modelText) {
       doc.setFontSize(6);
-      doc.text(modelText, 5, 95);
+      doc.setFont("helvetica", "normal");
+      doc.text(modelText, 5, 97);
     }
 
     doc.save(`etichetta_${lot}.pdf`);
