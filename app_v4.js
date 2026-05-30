@@ -1,4 +1,4 @@
-// App UI & Routing Logic
+﻿// App UI & Routing Logic
 
 // Global error handler
 window.onerror = function(message, source, lineno, colno, error) {
@@ -34,6 +34,9 @@ const App = {
         console.error("ERRORE CRITICO: Elemento 'main-content' non trovato nel DOM.");
         return;
       }
+      
+      // Avvia SyncEngine (offline queue + sync remoto)
+      if (typeof SyncEngine !== 'undefined') SyncEngine.start();
       
       const urlParams = new URLSearchParams(window.location.search);
       const viewParam = urlParams.get('view');
@@ -151,7 +154,7 @@ const App = {
         main.innerHTML = this.views.haccp_nc_detail(this.currentRecordId);
         break;
       case 'traceability':
-        title.innerText = 'RintracciabilitÃƒÂ ';
+        title.innerText = 'Rintracciabilità';
         main.innerHTML = this.views.traceability();
         this.bindTraceabilityEvents();
         break;
@@ -277,10 +280,14 @@ const App = {
       console.error("Render Error:", e);
       main.innerHTML = `<div class="card" style="border-left: 4px solid var(--danger-color);">
         <h3 style="color: var(--danger-color);">Errore di Caricamento</h3>
-        <p>Si ÃƒÂ¨ verificato un errore nel caricamento della vista <strong>${view}</strong>.</p>
+        <p>Si è verificato un errore nel caricamento della vista <strong>${view}</strong>.</p>
         <p style="font-size: 11px; margin-top: 10px; color: var(--text-secondary);">${e.message}</p>
         <button class="btn-primary" onclick="location.reload()" style="margin-top: 15px;">Ricarica App</button>
       </div>`;
+    }
+    // Risolve le chiavi idb:// nelle immagini del DOM appena renderizzato
+    if (typeof MediaStore !== 'undefined') {
+      MediaStore.resolveAll(main);
     }
   },
 
@@ -371,7 +378,7 @@ const App = {
 
       this.showScanResult('error', 'Record non trovato nel sistema. ID: ' + id);
     } catch (e) {
-      // Not a URL Ã¢â‚¬â€ try raw ID lookup
+      // Not a URL — try raw ID lookup
       const isIncoming = (Store.data.incoming_goods || []).some(g => g.id === url);
       if (isIncoming) {
         this.stopQRScanner();
@@ -422,7 +429,7 @@ const App = {
       if (!video || !canvas) return;
 
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        this.showScanResult('error', 'La fotocamera non ÃƒÂ¨ supportata da questo browser.');
+        this.showScanResult('error', 'La fotocamera non è supportata da questo browser.');
         return;
       }
 
@@ -446,7 +453,7 @@ const App = {
               const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
               const code = window.jsQR ? window.jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' }) : null;
               if (code && code.data) {
-                if (statusEl) statusEl.innerText = 'Ã¢Å“â€¦ QR rilevato!';
+                if (statusEl) statusEl.innerText = '✅ QR rilevato!';
                 this.resolveQRCode(code.data);
                 return; // stop loop on success
               }
@@ -508,7 +515,7 @@ const App = {
      const g = Store.data.incoming_goods.find(x => x.id === id);
      if(!g) return;
      
-     const val = prompt('Inserisci la quantitÃƒÂ  persa o eliminata (es. prodotto scaduto, rovinato, ecc.):');
+     const val = prompt('Inserisci la quantità persa o eliminata (es. prodotto scaduto, rovinato, ecc.):');
      if(val) {
          const num = parseFloat(val.replace(',','.'));
          if(isNaN(num) || num <= 0) {
@@ -711,7 +718,7 @@ const App = {
         .filter(g => g.availableQty > 0 || (savedIngredients && savedIngredients.find(si => si.incomingId === g.id)))
         .sort((a,b) => new Date(a.expiry) - new Date(b.expiry));
       
-      // FIFO: pre-seleziona la scadenza piÃƒÂ¹ ravvicinata se nuovo, o quello salvato se edit
+      // FIFO: pre-seleziona la scadenza più ravvicinata se nuovo, o quello salvato se edit
       let selectedLotId = '';
       if (savedIngredients) {
         const saved = savedIngredients.find(si => si.ingredientId === ri.ingredientId);
@@ -843,7 +850,7 @@ const App = {
   },
 
   clearTraceData() {
-    if (confirm("Vuoi cancellare tutti i dati della TRACCIABILITÃƒâ‚¬ (Ricette, Carichi Merci, Produzioni, Fornitori, Ingredienti)?")) {
+    if (confirm("Vuoi cancellare tutti i dati della TRACCIABILITÀ (Ricette, Carichi Merci, Produzioni, Fornitori, Ingredienti)?")) {
       if (confirm("Attenzione: perderai tutto l'inventario e lo storico lotti. Procedere?")) {
         Store.data.incoming_goods = [];
         Store.data.productions = [];
@@ -851,15 +858,15 @@ const App = {
         Store.data.ingredients = [];
         Store.data.suppliers = [];
         Store.save();
-        alert("Dati TracciabilitÃƒÂ  cancellati con successo.");
+        alert("Dati Tracciabilità cancellati con successo.");
         this.renderView('settings_maintenance');
       }
     }
   },
 
   factoryReset() {
-    if (confirm("ATTENZIONE! Questa operazione cancellerÃƒÂ  ogni dato inserito nell'app, incluse attrezzature, lavoratori e configurazioni. Vuoi procedere?")) {
-      if (confirm("ULTIMO AVVISO: L'app verrÃƒÂ  riportata allo stato iniziale di fabbrica. Sei veramente sicuro?")) {
+    if (confirm("ATTENZIONE! Questa operazione cancellerà ogni dato inserito nell'app, incluse attrezzature, lavoratori e configurazioni. Vuoi procedere?")) {
+      if (confirm("ULTIMO AVVISO: L'app verrà riportata allo stato iniziale di fabbrica. Sei veramente sicuro?")) {
         Store.data.workers = [];
         Store.data.equipments = [];
         Store.data.work_environments = [];
@@ -1150,12 +1157,12 @@ const App = {
         { id: 'haccp_nc', label: 'Non Conformit\u00e0', section: 'HACCP' },
         { id: 'haccp_structure', label: 'Ambienti', section: 'HACCP' },
         { id: 'haccp_maintenance', label: 'Manutenzione', section: 'HACCP' },
-        { id: 'trace_incoming', label: 'Carico Merci', section: 'TracciabilitÃƒÂ ' },
-        { id: 'trace_production', label: 'Produzione', section: 'TracciabilitÃƒÂ ' },
-        { id: 'trace_recipes', label: 'Ricettario', section: 'TracciabilitÃƒÂ ' },
-        { id: 'trace_suppliers', label: 'Fornitori', section: 'TracciabilitÃƒÂ ' },
-        { id: 'trace_ingredients', label: 'Magazzino', section: 'TracciabilitÃƒÂ ' },
-        { id: 'labels', label: 'Etichette Produzioni', section: 'TracciabilitÃƒÂ ' }
+        { id: 'trace_incoming', label: 'Carico Merci', section: 'Tracciabilità' },
+        { id: 'trace_production', label: 'Produzione', section: 'Tracciabilità' },
+        { id: 'trace_recipes', label: 'Ricettario', section: 'Tracciabilità' },
+        { id: 'trace_suppliers', label: 'Fornitori', section: 'Tracciabilità' },
+        { id: 'trace_ingredients', label: 'Magazzino', section: 'Tracciabilità' },
+        { id: 'labels', label: 'Etichette Produzioni', section: 'Tracciabilità' }
       ];
 
       return `
@@ -1198,7 +1205,7 @@ const App = {
           ${tempEquipments.length > 0 ? tempEquipments.map(eq => {
             const eqRecords = records.filter(r => r.equipmentId === eq.id).sort((a,b) => new Date(b.date + 'T' + (b.time||'00:00')) - new Date(a.date + 'T' + (a.time||'00:00')));
             const lastRec = eqRecords.length > 0 ? eqRecords[0] : null;
-            const lastRecStr = lastRec ? `${App.formatDate(lastRec.date)} ${lastRec.time||''} - ${lastRec.temp !== undefined ? lastRec.temp+'Ã‚Â°C' : lastRec.status}` : 'Nessuna registrazione';
+            const lastRecStr = lastRec ? `${App.formatDate(lastRec.date)} ${lastRec.time||''} - ${lastRec.temp !== undefined ? lastRec.temp+'°C' : lastRec.status}` : 'Nessuna registrazione';
 
             return `
             <div class="list-item" style="cursor: pointer; padding: 0; margin-bottom: 10px; background: white; border-radius: var(--radius-md); border: 1px solid var(--border-color); display: flex; align-items: stretch; overflow: hidden;">
@@ -1243,8 +1250,8 @@ const App = {
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 14px;">
               <div><strong>Tipologia:</strong> ${eq.type}</div>
               <div><strong>Ubicazione:</strong> ${eq.locationName || 'N/D'}</div>
-              <div><strong>Range Min:</strong> ${eq.minTemp}Ã‚Â°C</div>
-              <div><strong>Range Max:</strong> ${eq.maxTemp}Ã‚Â°C</div>
+              <div><strong>Range Min:</strong> ${eq.minTemp}°C</div>
+              <div><strong>Range Max:</strong> ${eq.maxTemp}°C</div>
             </div>
           </div>
           
@@ -1266,7 +1273,7 @@ const App = {
                 </div>
                 <div style="display: flex; align-items: center; gap: 20px;">
                   <div style="font-weight: 800; font-size: 18px; color: var(--text-primary);">
-                    ${r.temp !== undefined ? r.temp+'Ã‚Â°C' : '-'}
+                    ${r.temp !== undefined ? r.temp+'°C' : '-'}
                   </div>
                   <div style="display: flex; gap: 8px;">
                     <button class="btn-icon" onclick="App.openModal('edit-temperature', '${r.id}')" style="background: none; border: none; color: var(--primary-color); cursor: pointer; padding: 5px;">
@@ -1303,7 +1310,7 @@ const App = {
              <button class="btn-secondary" style="flex: 1;" onclick="App.openModal('filter-san')"><i class="ph ph-calendar"></i> Filtra</button>
           </div>
 
-          <h4 style="margin-bottom: 10px;">AttivitÃƒÂ  dal ${App.formatDate(fromDate)} al ${App.formatDate(toDate)}</h4>
+          <h4 style="margin-bottom: 10px;">Attività dal ${App.formatDate(fromDate)} al ${App.formatDate(toDate)}</h4>
           <div class="list-container">
             ${filtered.length > 0 ? filtered.map(r => `
               <div class="list-item" style="padding: 0; border-bottom: 1px solid var(--border-color); display: flex; align-items: stretch; background: white; margin-bottom: 5px; border-radius: 8px; cursor: pointer; overflow: hidden;">
@@ -1324,7 +1331,7 @@ const App = {
                   </button>
                 </div>
               </div>
-            `).join('') : '<p style="text-align: center; padding: 20px; color: var(--text-secondary);">Nessuna attivitÃƒÂ  registrata.</p>'}
+            `).join('') : '<p style="text-align: center; padding: 20px; color: var(--text-secondary);">Nessuna attività registrata.</p>'}
           </div>
         </div>
       `;
@@ -1554,7 +1561,7 @@ const App = {
                 </div>
                 <i class="ph ph-caret-right" style="color: var(--text-secondary);"></i>
               </div>
-            `).join('') : '<p style="text-align: center; color: var(--text-secondary);">Nessuna attivitÃƒÂ  registrata.</p>'}
+            `).join('') : '<p style="text-align: center; color: var(--text-secondary);">Nessuna attività registrata.</p>'}
           </div>
         </div>
       `;
@@ -1717,7 +1724,7 @@ const App = {
           </div>
 
           <div style="background: rgba(0,0,0,0.02); padding: 15px; border-radius: 12px; margin-bottom: 20px;">
-            <h4 style="margin-bottom: 12px; font-size: 11px; text-transform: uppercase; color: var(--text-secondary);">Ingredienti (in ordine di quantitÃƒÂ )</h4>
+            <h4 style="margin-bottom: 12px; font-size: 11px; text-transform: uppercase; color: var(--text-secondary);">Ingredienti (in ordine di quantità)</h4>
             <div class="list-container">
               ${ingredients.map(i => `
                 <div class="list-item" style="padding: 10px 0; border-bottom: 1px dashed var(--border-color); background: none; border-radius: 0;">
@@ -1806,7 +1813,7 @@ const App = {
       const adjMovements = adjustments.map(a => ({
          date: a.date,
          qty: parseFloat(a.quantity) || 0,
-         label: 'QuantitÃƒÂ  persa (Rettifica)',
+         label: 'Quantità persa (Rettifica)',
          sublabel: a.reason || 'Manuale',
          type: 'ADJ'
       }));
@@ -1865,7 +1872,7 @@ const App = {
           </div>
 
           <div style="background: rgba(0,0,0,0.02); padding: 15px; border-radius: 12px; text-align: center; margin-bottom: 24px;">
-             <h4 style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 10px;">QR Code TracciabilitÃƒÂ </h4>
+             <h4 style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 10px;">QR Code Tracciabilità</h4>
              <div id="incoming-qrcode" style="display: flex; justify-content: center;"></div>
              <p style="font-size: 11px; color: var(--text-secondary); margin-top: 10px;">Inquadra per aprire la scheda</p>
              <button class="btn-primary" style="margin-top: 15px; width: 100%;" onclick="App.printIncomingLabel('${g.id}')"><i class="ph ph-printer"></i> Stampa Etichetta</button>
@@ -1877,7 +1884,7 @@ const App = {
             <div style="margin-bottom: 15px;">
               <p style="font-size: 13px; font-weight: 600; margin-bottom: 8px;">Fattura / DDT:</p>
               ${(g.ddtPhoto || (g.photos && g.photos.ddt)) 
-                ? `<img src="${g.ddtPhoto || g.photos.ddt}" style="width: 100px; height: 100px; object-fit: cover; border-radius: 8px; cursor: zoom-in; border: 1px solid var(--border-color);" onclick="App.enlargeImage(this.src)" />`
+                ? `<img data-media-key="${g.ddtPhoto || g.photos.ddt}" src="" style="width: 100px; height: 100px; object-fit: cover; border-radius: 8px; cursor: zoom-in; border: 1px solid var(--border-color); background:var(--bg-secondary);" onclick="App.enlargeImage('${g.ddtPhoto || g.photos.ddt}')" />`
                 : '<p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Nessuna foto DDT caricata.</p>'}
             </div>
 
@@ -1885,9 +1892,9 @@ const App = {
               <p style="font-size: 13px; font-weight: 600; margin-bottom: 8px;">Etichetta Lotto / Scadenza:</p>
               <div style="display: flex; flex-wrap: wrap; gap: 8px;">
                 ${g.labelPhoto 
-                  ? `<img src="${g.labelPhoto}" style="width: 100px; height: 100px; object-fit: cover; border-radius: 8px; cursor: zoom-in; border: 1px solid var(--border-color);" onclick="App.enlargeImage(this.src)" />`
+                  ? `<img data-media-key="${g.labelPhoto}" src="" style="width: 100px; height: 100px; object-fit: cover; border-radius: 8px; cursor: zoom-in; border: 1px solid var(--border-color); background:var(--bg-secondary);" onclick="App.enlargeImage('${g.labelPhoto}')" />`
                   : (g.photos && g.photos.lot && g.photos.lot.length > 0 
-                    ? g.photos.lot.map(src => `<img src="${src}" style="width: 80px; height: 80px; object-fit: cover; border-radius: 8px; cursor: zoom-in; border: 1px solid var(--border-color);" onclick="App.enlargeImage(this.src)" />`).join('')
+                    ? g.photos.lot.map(k => `<img data-media-key="${k}" src="" style="width: 80px; height: 80px; object-fit: cover; border-radius: 8px; cursor: zoom-in; border: 1px solid var(--border-color); background:var(--bg-secondary);" onclick="App.enlargeImage('${k}')" />`).join('')
                     : '<p style="font-size: 12px; color: var(--text-secondary); font-style: italic;">Nessuna foto lotto caricata.</p>')}
               </div>
             </div>
@@ -2051,7 +2058,7 @@ const App = {
           <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px;">
             <div style="flex: 1; padding-right: 15px;">
               <h2 style="margin-bottom: 4px; font-size: 24px;">${ing.name}</h2>
-              <p style="font-size: 14px; color: var(--text-secondary);">UnitÃƒÂ : ${ing.unit}</p>
+              <p style="font-size: 14px; color: var(--text-secondary);">Unità: ${ing.unit}</p>
             </div>
             <div class="status-badge ${currentStock < (ing.minStock || 5) ? 'status-alert' : 'status-ok'}" style="font-size: 16px; padding: 10px 15px; border-radius: 12px; font-weight: 800;">
               ${currentStock.toFixed(2).replace('.', ',')} ${ing.unit}
@@ -2151,7 +2158,7 @@ const App = {
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; font-size: 13px;">
               <div><strong>Lotto Interno:</strong><br>${p.lot}</div>
               <div><strong>Data Prod:</strong><br>${App.formatDate(p.date)}</div>
-              <div><strong>QuantitÃƒÂ :</strong><br>${p.quantityProduced} kg/pz</div>
+              <div><strong>Quantità:</strong><br>${p.quantityProduced} kg/pz</div>
               <div><strong>Scadenza:</strong><br>${App.formatDate(p.expiry)}</div>
             </div>
           </div>
@@ -2186,8 +2193,8 @@ const App = {
       return `
         <div class="card">
           <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.stopQRScanner(); App.renderView('traceability')"><i class="ph ph-arrow-left"></i> Indietro</button>
-          <h3><i class="ph-fill ph-qr-code"></i> Scanner QR TracciabilitÃƒÂ </h3>
-          <p style="margin-bottom: 20px; color: var(--text-secondary);">Inquadra il QR Code di un'etichetta merce o di produzione per accedere istantaneamente alla scheda di tracciabilitÃƒÂ .</p>
+          <h3><i class="ph-fill ph-qr-code"></i> Scanner QR Tracciabilità</h3>
+          <p style="margin-bottom: 20px; color: var(--text-secondary);">Inquadra il QR Code di un'etichetta merce o di produzione per accedere istantaneamente alla scheda di tracciabilità.</p>
 
           <!-- Scan Result Banner -->
           <div id="scan-result-msg" style="display:none; padding: 12px 16px; border-radius: 10px; margin-bottom: 16px; font-weight: 600; font-size: 14px;"></div>
@@ -2225,8 +2232,8 @@ const App = {
           <div style="margin-top: 24px; padding: 15px; background: rgba(0,0,0,0.02); border-radius: 12px; border: 1px solid var(--border-color);">
             <h4 style="font-size: 12px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 10px;"><i class="ph ph-info"></i> Come funziona</h4>
             <ul style="list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px;">
-              <li style="font-size: 13px; display: flex; align-items: flex-start; gap: 8px;"><i class="ph-fill ph-truck" style="color: var(--primary-color); margin-top: 2px;"></i><span><strong>QR Carico Merce</strong> Ã¢â€ â€™ apre la scheda del lotto con giacenza, DDT e utilizzi in produzione</span></li>
-              <li style="font-size: 13px; display: flex; align-items: flex-start; gap: 8px;"><i class="ph-fill ph-cooking-pot" style="color: var(--success-color); margin-top: 2px;"></i><span><strong>QR Produzione</strong> Ã¢â€ â€™ apre la scheda di riepilogo con ingredienti e lotti utilizzati</span></li>
+              <li style="font-size: 13px; display: flex; align-items: flex-start; gap: 8px;"><i class="ph-fill ph-truck" style="color: var(--primary-color); margin-top: 2px;"></i><span><strong>QR Carico Merce</strong> → apre la scheda del lotto con giacenza, DDT e utilizzi in produzione</span></li>
+              <li style="font-size: 13px; display: flex; align-items: flex-start; gap: 8px;"><i class="ph-fill ph-cooking-pot" style="color: var(--success-color); margin-top: 2px;"></i><span><strong>QR Produzione</strong> → apre la scheda di riepilogo con ingredienti e lotti utilizzati</span></li>
             </ul>
           </div>
         </div>
@@ -2273,7 +2280,7 @@ const App = {
       const renderShipment = (s) => `
         <div class="list-item" style="padding: 12px; display: flex; align-items: center; gap: 15px;">
           <div style="width: 45px; height: 45px; background: var(--bg-body); border-radius: 8px; display: flex; align-items: center; justify-content: center; overflow: hidden; border: 1px solid var(--border-color); cursor: pointer;" onclick="App.enlargeImage('${s.ddtPhoto}')">
-            <img src="${s.ddtPhoto}" style="width: 100%; height: 100%; object-fit: cover;" />
+            <img data-media-key="${s.ddtPhoto}" src="" style="width: 100%; height: 100%; object-fit: cover; background:var(--bg-secondary);" />
           </div>
           <div style="flex: 1;">
             <div class="item-title" style="font-weight: 700; font-family: monospace; font-size: 13px; color: var(--primary-color);">${s.fileName || 'Documento_Senza_Nome'}.jpg</div>
@@ -2339,7 +2346,7 @@ const App = {
                 </div>
                 <div>
                   <div style="font-size: 16px; font-weight: 800; letter-spacing: -0.3px;">Etichetta Interna</div>
-                  <div style="font-size: 12px; opacity: 0.7; margin-top: 2px;">QR Code Ã‚Â· Operatore Ã‚Â· Solo uso laboratorio</div>
+                  <div style="font-size: 12px; opacity: 0.7; margin-top: 2px;">QR Code · Operatore · Solo uso laboratorio</div>
                 </div>
               </div>
               <button id="btn-label-interna" class="btn-primary" style="width: 100%; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); color: white; font-weight: 700; letter-spacing: 0.3px;">
@@ -2355,7 +2362,7 @@ const App = {
                 </div>
                 <div>
                   <div style="font-size: 16px; font-weight: 800; letter-spacing: -0.3px;">Etichetta Vendita</div>
-                  <div style="font-size: 12px; opacity: 0.7; margin-top: 2px;">Reg. UE 1169/2011 Ã‚Â· Dati OSA Ã‚Â· Nessun QR</div>
+                  <div style="font-size: 12px; opacity: 0.7; margin-top: 2px;">Reg. UE 1169/2011 · Dati OSA · Nessun QR</div>
                 </div>
               </div>
               <button id="btn-label-vendita" class="btn-primary" style="width: 100%; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); color: white; font-weight: 700; letter-spacing: 0.3px;">
@@ -2456,10 +2463,10 @@ const App = {
             </div>
 
             <div style="background: #fff5f5; padding: 20px; border-radius: 12px; border: 2px solid #feb2b2;">
-              <h4 style="margin-bottom: 8px; color: #c53030;">2. Reset Dati TracciabilitÃƒÂ </h4>
+              <h4 style="margin-bottom: 8px; color: #c53030;">2. Reset Dati Tracciabilità</h4>
               <p style="font-size: 13px; color: #742a2a; margin-bottom: 12px;">Cancella Ricettario, Carichi, Produzioni, Ingredienti e Fornitori.</p>
               <button class="btn-danger" onclick="App.clearTraceData()" style="width: 100%; font-weight: bold;">
-                <i class="ph ph-trash"></i> CANCELLA TUTTA LA TRACCIABILITÃƒâ‚¬
+                <i class="ph ph-trash"></i> CANCELLA TUTTA LA TRACCIABILITÀ
               </button>
             </div>
 
@@ -2480,7 +2487,7 @@ const App = {
         <div class="card">
           <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
           <h3><i class="ph-fill ph-buildings"></i> Anagrafica Operatore (OSA)</h3>
-          <p>Inserisci i dati legali dell'attivitÃƒÂ  per le intestazioni dei documenti.</p>
+          <p>Inserisci i dati legali dell'attività per le intestazioni dei documenti.</p>
           
           <div class="form-group" style="margin-top: 20px;">
             <label>Ragione Sociale</label>
@@ -2503,7 +2510,7 @@ const App = {
             <input type="text" id="company-piva" value="${c.pIva || ''}" class="input-lg" placeholder="01234567890" />
           </div>
           <div class="form-group">
-            <label>Tipologia AttivitÃƒÂ </label>
+            <label>Tipologia Attività</label>
             <input type="text" id="company-attivita" value="${c.tipologiaAttivita || ''}" class="input-lg" placeholder="Ristorazione / Pasticceria / Ecc." />
           </div>
 
@@ -2589,7 +2596,7 @@ const App = {
               <option value="Annuale" ${config.frequency === 'Annuale' ? 'selected' : ''}>Annuale</option>
               <option value="All'occorrenza" ${config.frequency === "All'occorrenza" ? 'selected' : ''}>All'occorrenza</option>
             </select>
-            <p style="font-size: 11px; color: var(--text-secondary); margin-top: 5px;">Se impostata una frequenza (tranne all'occorrenza), la dashboard ricorderÃƒÂ  se la registrazione manca.</p>
+            <p style="font-size: 11px; color: var(--text-secondary); margin-top: 5px;">Se impostata una frequenza (tranne all'occorrenza), la dashboard ricorderà se la registrazione manca.</p>
           </div>
 
           <button class="btn-primary" onclick="App.saveModelConfig('${moduleId}')"><i class="ph ph-floppy-disk"></i> Salva Configurazione</button>
@@ -2989,7 +2996,7 @@ const App = {
           <textarea id="form-main-description" rows="3" placeholder="Descrivi l'intervento effettuato..."></textarea>
         </div>
         <div class="form-group">
-          <label>ModalitÃƒÂ </label>
+          <label>Modalità</label>
           <select id="form-main-category" onchange="document.getElementById('form-main-company-group').style.display = (this.value === 'Extraordinary' ? 'block' : 'none')">
             <option value="Ordinary">Ordinaria (Personale Interno)</option>
             <option value="Extraordinary">Straordinaria (Ditta Esterna)</option>
@@ -3199,7 +3206,7 @@ const App = {
           </div>
           <div style="display: flex; gap: 10px; align-items: flex-end;">
             <div style="flex: 1;">
-              <label style="font-size: 11px; text-transform: uppercase;">QuantitÃƒÂ </label>
+              <label style="font-size: 11px; text-transform: uppercase;">Quantità</label>
               <input type="number" id="form-recipe-qty" step="0.01" placeholder="0,00" style="background: white;" />
             </div>
             <button type="button" class="btn-primary" onclick="App.addIngredientToRecipe()" style="width: auto; padding: 0 20px; height: 42px;">
@@ -3259,7 +3266,7 @@ const App = {
         <div class="form-group"><label>Email</label><input type="email" id="sup-email" placeholder="info@azienda.it" /></div>
         <div class="checkbox-group" style="margin-top: 15px;">
           <input type="checkbox" id="sup-inactive" />
-          <label for="sup-inactive">Fornitore non piÃƒÂ¹ utilizzato</label>
+          <label for="sup-inactive">Fornitore non più utilizzato</label>
         </div>
 
         <h4 style="margin-top: 20px; margin-bottom: 10px; font-size: 13px; color: var(--text-secondary);">Ingredienti Forniti</h4>
@@ -3310,7 +3317,7 @@ const App = {
         <div class="form-group"><label>Email</label><input type="email" id="edit-sup-email" value="${s.email || ''}" /></div>
         <div class="checkbox-group" style="margin-top: 15px;">
           <input type="checkbox" id="edit-sup-inactive" ${s.inactive ? 'checked' : ''} />
-          <label for="edit-sup-inactive">Fornitore non piÃƒÂ¹ utilizzato</label>
+          <label for="edit-sup-inactive">Fornitore non più utilizzato</label>
         </div>
 
         <h4 style="margin-top: 20px; margin-bottom: 10px; font-size: 13px; color: var(--text-secondary);">Ingredienti Forniti</h4>
@@ -3402,7 +3409,7 @@ const App = {
 
           <div style="display: flex; gap: 10px; align-items: flex-end;">
             <div style="flex: 1;">
-              <input type="number" id="form-recipe-qty" step="0.01" placeholder="QuantitÃƒÂ " />
+              <input type="number" id="form-recipe-qty" step="0.01" placeholder="Quantità" />
             </div>
             <button type="button" class="btn-primary" onclick="App.addIngredientToRecipe()" style="width: auto; padding: 0 20px; height: 42px;">Aggiungi</button>
           </div>
@@ -3457,7 +3464,7 @@ const App = {
           <input type="text" id="ing-name" placeholder="Es. Farina 00" />
         </div>
         <div class="form-group">
-          <label>UnitÃƒÂ  di Misura</label>
+          <label>Unità di Misura</label>
           <select id="ing-unit">
             <option value="kg">kg</option>
             <option value="lt">lt</option>
@@ -3515,7 +3522,7 @@ const App = {
           <input type="text" id="edit-ing-name" value="${ing.name}" />
         </div>
         <div class="form-group">
-          <label>UnitÃƒÂ  di Misura</label>
+          <label>Unità di Misura</label>
           <select id="edit-ing-unit">
             <option value="kg" ${ing.unit === 'kg' ? 'selected' : ''}>kg</option>
             <option value="lt" ${ing.unit === 'lt' ? 'selected' : ''}>lt</option>
@@ -3584,11 +3591,11 @@ const App = {
         </div>
         <div style="display: flex; gap: 10px;">
           <div class="form-group" style="flex: 1;">
-            <label>Temp. Min Critica (Ã‚Â°C)</label>
+            <label>Temp. Min Critica (°C)</label>
             <input type="number" step="0.1" id="form-eq-min" value="0" />
           </div>
           <div class="form-group" style="flex: 1;">
-            <label>Temp. Max Critica (Ã‚Â°C)</label>
+            <label>Temp. Max Critica (°C)</label>
             <input type="number" step="0.1" id="form-eq-max" value="4" />
           </div>
         </div>
@@ -3708,7 +3715,7 @@ const App = {
         
         <div id="chk-rilevamento-section" style="display: ${rec.type === 'rilevamento' ? 'block' : 'none'};">
           <div class="form-group">
-            <label>Temperatura Rilevata (Ã‚Â°C) (Range: ${eq.minTemp}Ã‚Â°C - ${eq.maxTemp}Ã‚Â°C)</label>
+            <label>Temperatura Rilevata (°C) (Range: ${eq.minTemp}°C - ${eq.maxTemp}°C)</label>
             <input type="number" step="0.1" id="form-chk-temp" value="${rec.temp || ''}" oninput="App.evaluateTempCheck('${eq.minTemp}', '${eq.maxTemp}')" />
           </div>
           <div id="chk-feedback" style="margin-bottom: 15px; font-size: 16px;"></div>
@@ -3812,7 +3819,7 @@ const App = {
         
         <div id="chk-rilevamento-section">
           <div class="form-group">
-            <label>Temperatura Rilevata (Ã‚Â°C) (Range: ${eq.minTemp}Ã‚Â°C - ${eq.maxTemp}Ã‚Â°C)</label>
+            <label>Temperatura Rilevata (°C) (Range: ${eq.minTemp}°C - ${eq.maxTemp}°C)</label>
             <input type="number" step="0.1" id="form-chk-temp" oninput="App.evaluateTempCheck('${eq.minTemp}', '${eq.maxTemp}')" />
           </div>
           <div id="chk-feedback" style="margin-bottom: 15px; font-size: 16px;"></div>
@@ -3856,7 +3863,7 @@ const App = {
             equipmentId: eq.id,
             equipmentName: eq.name,
             equipmentLocation: eq.locationName,
-            equipmentRange: `${eq.minTemp}Ã‚Â°C / ${eq.maxTemp}Ã‚Â°C`,
+            equipmentRange: `${eq.minTemp}°C / ${eq.maxTemp}°C`,
             date: date,
             time: time,
             temp: temp,
@@ -3869,7 +3876,7 @@ const App = {
           if (!isConform) {
             Store.addItem('haccp_noncompliance', {
               date: date,
-              description: `Temperatura fuori range in ${eq.name} (${temp}Ã‚Â°C). Ubicazione: ${eq.locationName}. Range: ${eq.minTemp}/${eq.maxTemp}.`,
+              description: `Temperatura fuori range in ${eq.name} (${temp}°C). Ubicazione: ${eq.locationName}. Range: ${eq.minTemp}/${eq.maxTemp}.`,
               correctiveAction: corrective,
               operator: operator,
               closedAt: date
@@ -3924,11 +3931,11 @@ const App = {
             <div class="card" style="margin-bottom: 10px; padding: 12px; border: 1px solid var(--border-color); background: var(--bg-body);">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
                 <div style="font-weight: 700; font-size: 14px;">${eq.name}</div>
-                <div style="font-size: 11px; color: var(--text-secondary);">${eq.minTemp}Ã‚Â°C / ${eq.maxTemp}Ã‚Â°C</div>
+                <div style="font-size: 11px; color: var(--text-secondary);">${eq.minTemp}°C / ${eq.maxTemp}°C</div>
               </div>
               <div style="display: flex; gap: 10px; align-items: center;">
                 <input type="number" step="0.1" class="bulk-temp-input" data-eq-id="${eq.id}" placeholder="Temp." style="flex: 1; padding: 10px; border-radius: 8px; border: 1px solid var(--border-color); font-size: 16px; font-weight: bold; text-align: center;" />
-                <span style="font-weight: bold; color: var(--text-secondary);">Ã‚Â°C</span>
+                <span style="font-weight: bold; color: var(--text-secondary);">°C</span>
               </div>
             </div>
           `).join('')}
@@ -3956,7 +3963,7 @@ const App = {
                 equipmentId: eq.id,
                 equipmentName: eq.name,
                 equipmentLocation: eq.locationName,
-                equipmentRange: `${eq.minTemp}Ã‚Â°C / ${eq.maxTemp}Ã‚Â°C`,
+                equipmentRange: `${eq.minTemp}°C / ${eq.maxTemp}°C`,
                 date: date,
                 time: time,
                 temp: temp,
@@ -3969,7 +3976,7 @@ const App = {
               if (!isConform) {
                 Store.addItem('haccp_noncompliance', {
                   date: date,
-                  description: `Temperatura fuori range in ${eq.name} (${temp}Ã‚Â°C) durante registrazione rapida.`,
+                  description: `Temperatura fuori range in ${eq.name} (${temp}°C) durante registrazione rapida.`,
                   correctiveAction: 'Verifica immediata attrezzatura',
                   operator: operator,
                   closedAt: date
@@ -4316,7 +4323,7 @@ const App = {
         });
 
         if(savedCount === 0) {
-          alert("Inserisci i dati dei prodotti (ingrediente, quantitÃƒÂ  e scadenza).");
+          alert("Inserisci i dati dei prodotti (ingrediente, quantità e scadenza).");
           return;
         }
 
@@ -4355,7 +4362,7 @@ const App = {
         </div>
 
         <div class="form-group">
-          <label>QuantitÃƒÂ </label>
+          <label>Quantità</label>
           <input type="number" id="edit-inc-qty" step="0.01" value="${g.quantity}" />
         </div>
 
@@ -4442,7 +4449,7 @@ const App = {
           </select>
         </div>
         <div class="form-group">
-          <label>QuantitÃƒÂ  da Produrre (Kg/Pezzi)</label>
+          <label>Quantità da Produrre (Kg/Pezzi)</label>
           <input type="number" id="prod-quantity" value="1" step="0.1" oninput="App.updateProductionIngredients()" />
         </div>
         
@@ -4530,7 +4537,7 @@ const App = {
           </select>
         </div>
         <div class="form-group">
-          <label>QuantitÃƒÂ  Prodotta</label>
+          <label>Quantità Prodotta</label>
           <input type="number" id="edit-prod-quantity" value="${p.quantityProduced}" step="0.1" oninput="App.updateProductionIngredients(true)" />
         </div>
         
@@ -4689,7 +4696,7 @@ const App = {
         <div class="form-group">
           <div class="checkbox-group" style="background: rgba(0,0,0,0.02); padding: 10px; border-radius: 8px;">
             <input type="checkbox" id="nc-is-closed" ${r.isClosed ? 'checked' : ''} onchange="document.getElementById('nc-close-date-group').style.display = this.checked ? 'block' : 'none'" />
-            <label for="nc-is-closed" style="margin-bottom:0; font-weight: bold; color: var(--success-color);">NON CONFORMITÃƒâ‚¬ RISOLTA / CHIUSA</label>
+            <label for="nc-is-closed" style="margin-bottom:0; font-weight: bold; color: var(--success-color);">NON CONFORMITÀ RISOLTA / CHIUSA</label>
           </div>
         </div>
         
@@ -4862,15 +4869,15 @@ const App = {
     if (type === 'label-pre-print-interna') {
       const prodId = extraArg;
       const workers = Store.data.workers || [];
-      title.innerHTML = '<i class="ph-fill ph-qr-code"></i> Etichetta Interna Ã¢â‚¬â€ Configura';
+      title.innerHTML = '<i class="ph-fill ph-qr-code"></i> Etichetta Interna — Configura';
 
       body.innerHTML = `
-        <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">Questa etichetta ÃƒÂ¨ per uso interno del laboratorio. Contiene il QR Code di tracciabilitÃƒÂ  e il riferimento all'operatore.</p>
+        <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">Questa etichetta è per uso interno del laboratorio. Contiene il QR Code di tracciabilità e il riferimento all'operatore.</p>
         <div class="form-group">
           <label><i class="ph ph-user"></i> Operatore (Responsabile Produzione) *</label>
           <select id="label-interna-operator">
             <option value="">-- Seleziona Operatore --</option>
-            ${workers.map(w => `<option value="${w.firstName} ${w.lastName}">${w.firstName} ${w.lastName} Ã¢â‚¬â€ ${w.role || ''}</option>`).join('')}
+            ${workers.map(w => `<option value="${w.firstName} ${w.lastName}">${w.firstName} ${w.lastName} — ${w.role || ''}</option>`).join('')}
           </select>
           ${workers.length === 0 ? '<p style="font-size: 11px; color: var(--danger-color); margin-top: 5px;"><i class="ph ph-warning"></i> Nessun lavoratore configurato. Vai in Impostazioni > Lavoratori.</p>' : ''}
         </div>
@@ -4892,7 +4899,7 @@ const App = {
 
     if (type === 'label-pre-print-vendita') {
       const prodId = extraArg;
-      title.innerHTML = '<i class="ph-fill ph-certificate"></i> Etichetta Vendita Ã¢â‚¬â€ Configura';
+      title.innerHTML = '<i class="ph-fill ph-certificate"></i> Etichetta Vendita — Configura';
 
       body.innerHTML = `
         <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 16px;">Etichetta conforme <strong>Reg. UE 1169/2011</strong>. Nessun QR Code. Dati OSA in calce.</p>
@@ -4901,11 +4908,11 @@ const App = {
           <input type="number" id="label-weight" placeholder="es. 250" min="1" />
         </div>
         <div class="form-group">
-          <label>ModalitÃƒÂ  di Conservazione</label>
+          <label>Modalità di Conservazione</label>
           <select id="label-storage">
             <option value="Conservare in luogo fresco e asciutto.">Conservare in luogo fresco e asciutto.</option>
-            <option value="Conservare in frigorifero da 0Ã‚Â°C a +4Ã‚Â°C.">Conservare in frigorifero da 0Ã‚Â°C a +4Ã‚Â°C.</option>
-            <option value="Conservare in congelatore a -18Ã‚Â°C. Una volta scongelato, il prodotto non deve essere ricongelato.">Conservare in congelatore a -18Ã‚Â°C. Una volta scongelato, il prodotto non deve essere ricongelato.</option>
+            <option value="Conservare in frigorifero da 0°C a +4°C.">Conservare in frigorifero da 0°C a +4°C.</option>
+            <option value="Conservare in congelatore a -18°C. Una volta scongelato, il prodotto non deve essere ricongelato.">Conservare in congelatore a -18°C. Una volta scongelato, il prodotto non deve essere ricongelato.</option>
             <option value="Dopo l'apertura conservare in frigorifero e consumare entro 2-3 giorni.">Dopo l'apertura conservare in frigorifero e consumare entro 2-3 giorni.</option>
             <option value="Conservare al riparo dalla luce diretta e da fonti di calore.">Conservare al riparo dalla luce diretta e da fonti di calore.</option>
           </select>
@@ -4994,18 +5001,21 @@ const App = {
 
     for (let i = 0; i < files.length; i++) {
       const reader = new FileReader();
-      reader.onload = (e) => {
+      reader.onload = async (e) => {
         const base64 = e.target.result;
+        // Salva in IndexedDB e usa la chiave idb:// invece del base64 raw
+        const idbKey = await MediaStore.save(base64);
         if (type === 'ddt') {
-          App.tempIncomingPhotos.ddt = base64;
-          document.getElementById('preview-ddt').style.display = 'block';
+          App.tempIncomingPhotos.ddt = idbKey;
+          const previewDdt = document.getElementById('preview-ddt');
+          if (previewDdt) previewDdt.style.display = 'block';
         } else {
           if (!App.tempIncomingPhotos.lot) App.tempIncomingPhotos.lot = [];
-          App.tempIncomingPhotos.lot.push(base64);
+          App.tempIncomingPhotos.lot.push(idbKey);
           const preview = document.getElementById('preview-lot-count');
-          if(preview) {
-             preview.style.display = 'block';
-             document.getElementById('lot-count-val').innerText = App.tempIncomingPhotos.lot.length;
+          if (preview) {
+            preview.style.display = 'block';
+            document.getElementById('lot-count-val').innerText = App.tempIncomingPhotos.lot.length;
           }
         }
       };
@@ -5015,28 +5025,36 @@ const App = {
 
   handleShipmentPhoto(input) {
     const file = input.files[0];
-    if(!file) return;
+    if (!file) return;
     const reader = new FileReader();
-    reader.onload = (e) => {
-      this.tempShipmentPhoto = e.target.result;
-      document.getElementById('img-preview-ddt').src = e.target.result;
-      document.getElementById('preview-ddt').style.display = 'block';
+    reader.onload = async (e) => {
+      const base64 = e.target.result;
+      // Salva su IndexedDB per evitare di saturare localStorage
+      const idbKey = await MediaStore.save(base64);
+      this.tempShipmentPhoto = idbKey;
+      // Mostra anteprima nella UI usando il base64 (già in memoria)
+      const previewImg = document.getElementById('img-preview-ddt');
+      if (previewImg) previewImg.src = base64;
+      const previewDiv = document.getElementById('preview-ddt');
+      if (previewDiv) previewDiv.style.display = 'block';
     };
     reader.readAsDataURL(file);
   },
 
   handleItemPhoto(input, index) {
     const file = input.files[0];
-    if(!file) return;
+    if (!file) return;
     const reader = new FileReader();
-    reader.onload = (e) => {
-      if(!this.tempIncomingItems[index]) this.tempIncomingItems[index] = {};
-      this.tempIncomingItems[index].photo = e.target.result;
+    reader.onload = async (e) => {
+      const base64 = e.target.result;
+      const idbKey = await MediaStore.save(base64);
+      if (!this.tempIncomingItems[index]) this.tempIncomingItems[index] = {};
+      this.tempIncomingItems[index].photo = idbKey;
+      // Anteprima UI con base64 (già in memoria, non serve ri-leggerla da IDB)
       const preview = document.getElementById(`preview-item-photo-${index}`);
-      preview.src = e.target.result;
-      preview.style.display = 'block';
-      document.getElementById(`btn-label-photo-${index}`).innerHTML = '<i class="ph ph-check"></i> Foto OK';
-      document.getElementById(`btn-label-photo-${index}`).classList.replace('btn-secondary', 'btn-success');
+      if (preview) { preview.src = base64; preview.style.display = 'block'; }
+      const btn = document.getElementById(`btn-label-photo-${index}`);
+      if (btn) { btn.innerHTML = '<i class="ph ph-check"></i> Foto OK'; btn.classList.replace('btn-secondary', 'btn-success'); }
     };
     reader.readAsDataURL(file);
   },
@@ -5071,7 +5089,7 @@ const App = {
 
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
         <div class="form-group">
-          <label style="font-size: 11px;">QuantitÃƒÂ  (<span class="item-unit-label">-</span>)</label>
+          <label style="font-size: 11px;">Quantità (<span class="item-unit-label">-</span>)</label>
           <input type="number" class="item-qty" step="0.01" placeholder="0,00" />
         </div>
         <div class="form-group">
@@ -5101,29 +5119,27 @@ const App = {
     else label.innerText = '-';
   },
 
-  enlargeImage(src) {
+  async enlargeImage(srcOrKey) {
+    // Risolve la chiave idb:// in un data URL reale
+    let src = srcOrKey;
+    if (typeof MediaStore !== 'undefined' && MediaStore.isIdbKey(srcOrKey)) {
+      src = await MediaStore.get(srcOrKey) || srcOrKey;
+    }
     const overlay = document.createElement('div');
-    overlay.style.position = 'fixed';
-    overlay.style.top = '0';
-    overlay.style.left = '0';
-    overlay.style.width = '100%';
-    overlay.style.height = '100%';
-    overlay.style.background = 'rgba(0,0,0,0.9)';
-    overlay.style.display = 'flex';
-    overlay.style.alignItems = 'center';
-    overlay.style.justifyContent = 'center';
-    overlay.style.zIndex = '10000';
-    overlay.style.cursor = 'zoom-out';
-    overlay.onclick = () => document.body.removeChild(overlay);
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.92);display:flex;align-items:center;justify-content:center;z-index:10000;cursor:zoom-out;flex-direction:column;gap:12px;';
+    overlay.onclick = (e) => { if (e.target === overlay || e.target === img) document.body.removeChild(overlay); };
 
     const img = document.createElement('img');
     img.src = src;
-    img.style.maxWidth = '95%';
-    img.style.maxHeight = '95%';
-    img.style.borderRadius = '8px';
-    img.style.boxShadow = '0 0 20px rgba(0,0,0,0.5)';
+    img.style.cssText = 'max-width:95%;max-height:88%;border-radius:8px;box-shadow:0 0 30px rgba(0,0,0,0.7);';
+
+    const closeBtn = document.createElement('button');
+    closeBtn.innerHTML = '<i class="ph ph-x"></i> Chiudi';
+    closeBtn.style.cssText = 'background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.3);padding:8px 20px;border-radius:20px;cursor:pointer;font-size:14px;';
+    closeBtn.onclick = () => document.body.removeChild(overlay);
 
     overlay.appendChild(img);
+    overlay.appendChild(closeBtn);
     document.body.appendChild(overlay);
   },
 
@@ -5169,7 +5185,7 @@ const App = {
   },
 
   bindTraceabilityEvents() {
-    // Event bindings per la vista tracciabilitÃƒÂ 
+    // Event bindings per la vista tracciabilità
   },
 
   bindSettingsEvents() {
@@ -5258,7 +5274,7 @@ const App = {
       <!DOCTYPE html>
       <html><head>
         <meta charset="UTF-8">
-        <title>Etichetta Interna Ã¢â‚¬â€ ${prod.recipeName}</title>
+        <title>Etichetta Interna — ${prod.recipeName}</title>
         <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"><\/script>
         <style>
           * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -5284,7 +5300,7 @@ const App = {
           <div class="row"><label>Lotto Interno</label><span>${prod.lot}</span></div>
           <div class="row"><label>Data Produzione</label><span>${App.formatDate(prod.date)}</span></div>
           <div class="row"><label>Scadenza / TMC</label><span>${expiryFormatted}</span></div>
-          <div class="row"><label>QuantitÃƒÂ </label><span>${prod.quantityProduced} kg/pz</span></div>
+          <div class="row"><label>Quantità</label><span>${prod.quantityProduced} kg/pz</span></div>
           ${notesHtml ? `<div class="row" style="display:block; padding-top: 8px;">${notesHtml}</div>` : ''}
           <div class="qr-section">
             <div id="qr-print"></div>
@@ -5396,7 +5412,7 @@ const App = {
           <i class="ph-fill ph-certificate" style="color: #047857; font-size: 22px;"></i>
           <div>
             <div style="font-weight: 800; font-size: 15px; color: #047857;">Anteprima Etichetta Vendita</div>
-            <div style="font-size: 11px; color: var(--text-secondary);">Reg. UE 1169/2011 Ã¢â‚¬â€ Nessun QR Code</div>
+            <div style="font-size: 11px; color: var(--text-secondary);">Reg. UE 1169/2011 — Nessun QR Code</div>
           </div>
         </div>
 
@@ -5549,7 +5565,7 @@ const App = {
     // Intestazione con logo simulato
     doc.setFontSize(22);
     doc.setTextColor(37, 99, 235); // Primary color
-    doc.text("HACCP & TRACCIABILITÃƒâ‚¬", 14, 20);
+    doc.text("HACCP & TRACCIABILITÀ", 14, 20);
     doc.setFontSize(14);
     doc.setTextColor(0, 0, 0);
     let titleText = title;
@@ -5629,7 +5645,7 @@ const App = {
     // Intestazione
     doc.setFontSize(22);
     doc.setTextColor(37, 99, 235);
-    doc.text("HACCP & TRACCIABILITÃƒâ‚¬", 14, 20);
+    doc.text("HACCP & TRACCIABILITÀ", 14, 20);
     doc.setFontSize(14);
     doc.setTextColor(0, 0, 0);
     let titleText = title;
@@ -5692,7 +5708,7 @@ const App = {
 
       let finalY = doc.lastAutoTable.finalY || 50;
       
-      // Controllo se c'ÃƒÂ¨ spazio sufficiente
+      // Controllo se c'è spazio sufficiente
       if(finalY > doc.internal.pageSize.height - 40) {
         doc.addPage();
         finalY = 20;
@@ -5733,7 +5749,7 @@ const App = {
     
     doc.setFontSize(20);
     doc.setTextColor(37, 99, 235);
-    doc.text("HACCP & TRACCIABILITÃƒâ‚¬", 14, 20);
+    doc.text("HACCP & TRACCIABILITÀ", 14, 20);
     doc.setFontSize(14);
     doc.setTextColor(0, 0, 0);
     let titleText = title;
@@ -5766,7 +5782,7 @@ const App = {
         r.time || '-',
         r.equipmentName || 'N/D',
         r.equipmentLocation || 'N/D',
-        r.temp !== undefined ? r.temp + 'Ã‚Â°C' : (r.status === 'GIUSTIFICATO' ? 'GIUSTIF.' : '-'),
+        r.temp !== undefined ? r.temp + '°C' : (r.status === 'GIUSTIFICATO' ? 'GIUSTIF.' : '-'),
         r.equipmentRange || '-',
         r.status,
         r.status === 'NON CONFORME' ? (r.correctiveAction || '-') : (r.justification || ''),
@@ -5781,7 +5797,7 @@ const App = {
         headStyles: { fillColor: [37, 99, 235], fontSize: 8 },
         styles: { fontSize: 8, cellPadding: 2 },
         columnStyles: {
-          7: { cellWidth: 40 } // PiÃƒÂ¹ spazio per le note
+          7: { cellWidth: 40 } // Più spazio per le note
         }
       });
     }
@@ -5852,11 +5868,11 @@ const App = {
     ];
 
     if (!workerId) {
-      // MODALITÃƒâ‚¬ COMPATTA (LANDSCAPE) - TUTTI I LAVORATORI
+      // MODALITÀ COMPATTA (LANDSCAPE) - TUTTI I LAVORATORI
       const doc = new jsPDF('landscape');
       doc.setFontSize(20);
       doc.setTextColor(37, 99, 235);
-      doc.text("HACCP & TRACCIABILITÃƒâ‚¬", 14, 15);
+      doc.text("HACCP & TRACCIABILITÀ", 14, 15);
       doc.setFontSize(14);
       doc.setTextColor(0, 0, 0);
       doc.text(`REGISTRO IGIENE PERSONALE - TUTTI I LAVORATORI`, 14, 25);
@@ -5894,7 +5910,7 @@ const App = {
         columnStyles: {
           0: { cellWidth: 18 }, // Data
           1: { cellWidth: 25 }, // Lavoratore
-          11: { cellWidth: 45 }, // Note (un po' piÃƒÂ¹ larga)
+          11: { cellWidth: 45 }, // Note (un po' più larga)
           12: { cellWidth: 22 }  // Firma
         },
         didDrawCell: (data) => {
@@ -5918,14 +5934,14 @@ const App = {
       doc.save(`igiene_personale_collettivo.pdf`);
 
     } else {
-      // MODALITÃƒâ‚¬ DETTAGLIATA (PORTRAIT) - SINGOLO LAVORATORE
+      // MODALITÀ DETTAGLIATA (PORTRAIT) - SINGOLO LAVORATORE
       const doc = new jsPDF();
       expandedData.forEach((r, idx) => {
         if (idx > 0) doc.addPage();
         
         doc.setFontSize(22);
         doc.setTextColor(37, 99, 235);
-        doc.text("HACCP & TRACCIABILITÃƒâ‚¬", 14, 20);
+        doc.text("HACCP & TRACCIABILITÀ", 14, 20);
         doc.setFontSize(14);
         doc.setTextColor(0, 0, 0);
         doc.text("SCHEDA VERIFICA IGIENE PERSONALE", 14, 30);
@@ -6010,10 +6026,10 @@ const App = {
 
     doc.setFontSize(22);
     doc.setTextColor(37, 99, 235);
-    doc.text("HACCP & TRACCIABILITÃƒâ‚¬", 14, 20);
+    doc.text("HACCP & TRACCIABILITÀ", 14, 20);
     doc.setFontSize(14);
     doc.setTextColor(0, 0, 0);
-    doc.text(`REGISTRO NON CONFORMITÃƒâ‚¬ ED AZIONI CORRETTIVE`, 14, 30);
+    doc.text(`REGISTRO NON CONFORMITÀ ED AZIONI CORRETTIVE`, 14, 30);
     if (fromDate && toDate) doc.setFontSize(10), doc.text(`Periodo: dal ${this.formatDate(fromDate)} al ${this.formatDate(toDate)}`, 14, 37);
 
     const tableData = filteredRecords.map(r => [
@@ -6079,7 +6095,7 @@ const App = {
       
       doc.setFontSize(20);
       doc.setTextColor(37, 99, 235);
-      doc.text("HACCP & TRACCIABILITÃƒâ‚¬", 14, 20);
+      doc.text("HACCP & TRACCIABILITÀ", 14, 20);
       doc.setFontSize(14);
       doc.setTextColor(0, 0, 0);
       doc.text("SCHEDA CONTROLLO AMBIENTI E STRUTTURE", 14, 30);

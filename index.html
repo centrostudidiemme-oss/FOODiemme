@@ -18,6 +18,7 @@
   <header>
     <img src="logo.png" alt="Logo" style="height: 40px; width: auto; object-fit: contain;">
     <h1 id="page-title">Dashboard</h1>
+    <i id="sync-status-indicator" class="ph ph-wifi-high" title="Online" style="font-size: 20px; color: var(--text-secondary); margin-left: auto; padding-right: 4px; transition: color 0.3s;"></i>
   </header>
 
   <main id="main-content">
@@ -74,7 +75,10 @@
     }
   }, true);
 </script>
-<script src="store.js?v=4"></script>
-<script src="app_v4.js"></script>
+<!-- Storage layer: IndexedDB per media, coda offline, sync remoto -->
+<script src="media.js?v=1"></script>
+<script src="sync.js?v=1"></script>
+<script src="store.js?v=5"></script>
+<script src="app_v4.js?v=5"></script>
 </body>
 </html>
