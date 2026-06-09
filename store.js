@@ -69,6 +69,8 @@ const Store = {
     haccp_chiller: [],
     haccp_hygiene: [],
     haccp_noncompliance: [],
+    haccp_pest: [],
+    worker_training: [],
     
     // Lavoratori
     workers: [
@@ -128,9 +130,9 @@ const Store = {
       { id: 'SUP-2', name: 'Latticini Verdi', contact: 'info@latticiniverdi.it' }
     ],
     ingredients: [
-      { id: 'ING-1', name: 'Farina 00', supplier: 'SUP-1', allergen: true, allergenName: 'Glutine', unit: 'kg' },
-      { id: 'ING-2', name: 'Latte Intero', supplier: 'SUP-2', allergen: true, allergenName: 'Latte', unit: 'L' },
-      { id: 'ING-3', name: 'Zucchero', supplier: 'SUP-1', allergen: false, unit: 'kg' }
+      { id: 'ING-1', name: 'Farina 00', unit: 'kg', allergenPresent: true, allergens: ['Cereali (Glutine)'] },
+      { id: 'ING-2', name: 'Latte Intero', unit: 'L', allergenPresent: true, allergens: ['Latte'] },
+      { id: 'ING-3', name: 'Zucchero', unit: 'kg', allergenPresent: false, allergens: [] }
     ],
     incoming_goods: [
       // Carichi
@@ -149,7 +151,9 @@ const Store = {
     ],
     productions: [
       // Produzioni completate
-    ]
+    ],
+    clients: [],
+    sales: []
   },
 
   init() {
@@ -167,6 +171,24 @@ const Store = {
         parsed = sanitizeObject(parsed);
         this.data = { ...this.data, ...parsed };
         
+        if (this.data.ingredients && Array.isArray(this.data.ingredients)) {
+          this.data.ingredients = this.data.ingredients.map(ing => {
+            if (!ing.allergens || !Array.isArray(ing.allergens)) {
+              if (ing.allergen === true) {
+                ing.allergens = ing.allergenName ? [ing.allergenName] : ['Allergene'];
+              } else {
+                ing.allergens = [];
+              }
+            }
+            ing.allergenPresent = ing.allergens.length > 0;
+            delete ing.minStock;
+            delete ing.supplier;
+            delete ing.allergenName;
+            delete ing.allergen;
+            return ing;
+          });
+        }
+        
         if (!this.data.settings) {
           this.data.settings = {
             applyModelNumber: true,
@@ -183,10 +205,11 @@ const Store = {
         const tables = [
           'haccp_sanitation', 'haccp_temperature', 'haccp_chiller', 
           'haccp_hygiene', 'haccp_noncompliance', 'haccp_structure',
-          'haccp_maintenance',
+          'haccp_maintenance', 'haccp_pest', 'worker_training',
           'haccp_temp_equipments', 'workers', 'equipments', 
           'work_environments', 'detergents', 'suppliers', 
-          'ingredients', 'incoming_goods', 'trace_shipments', 'recipes', 'productions'
+          'ingredients', 'incoming_goods', 'trace_shipments', 'recipes', 'productions',
+          'clients', 'sales'
         ];
         
         tables.forEach(table => {
@@ -208,7 +231,9 @@ const Store = {
             'trace_incoming': { model: 'MOD-CAR Rev.0', frequency: "All'occorrenza" },
             'trace_production': { model: 'MOD-PROD Rev.0', frequency: "All'occorrenza" },
             'trace_suppliers': { model: 'MOD-FOR Rev.0', frequency: "All'occorrenza" },
-            'haccp_maintenance': { model: 'MOD-MAN Rev.0', frequency: "All'occorrenza" }
+            'haccp_maintenance': { model: 'MOD-MAN Rev.0', frequency: "All'occorrenza" },
+            'haccp_pest': { model: 'MOD-INF Rev.0', frequency: 'Mensile' },
+            'worker_training': { model: 'MOD-FOR Rev.0', frequency: 'Annuale' }
           };
         }
         
@@ -325,8 +350,7 @@ const Store = {
         name: ing.name,
         unit: ing.unit,
         quantity: q,
-        allergens: ing.allergens || [],
-        isLow: q < (ing.minStock || 5)
+        allergenPresent: ing.allergenPresent || false
       };
     });
   },

@@ -1,4 +1,4 @@
-﻿// App UI & Routing Logic
+// App UI & Routing Logic
 
 // Global error handler
 window.onerror = function(message, source, lineno, colno, error) {
@@ -24,11 +24,17 @@ const App = {
   tempRecipeIngredients: [],
   tempIncomingItems: [],
   tempShipmentPhoto: null,
+  tempPestMapPhoto: null,
+  tempTrainingCertPhoto: null,
+  tempTrainingReportPhoto: null,
   incomingItemCounter: 0,
+  saleItemCounter: 0,
   
   init() {
     try {
       console.log("App init started...");
+      this.viewHistory = [];
+      this._isNavigatingBack = false;
       this.bindNavigation();
       if (!document.getElementById('main-content')) {
         console.error("ERRORE CRITICO: Elemento 'main-content' non trovato nel DOM.");
@@ -37,6 +43,22 @@ const App = {
       
       // Avvia SyncEngine (offline queue + sync remoto)
       if (typeof SyncEngine !== 'undefined') SyncEngine.start();
+      
+      // Handle browser back/forward buttons
+      window.addEventListener('popstate', (event) => {
+        if (event.state && event.state.view) {
+          this._isNavigatingBack = true;
+          this.currentRecordId = event.state.recordId || null;
+          this.currentEqId = event.state.eqId || null;
+          this.renderView(event.state.view, true);
+          this._isNavigatingBack = false;
+        } else {
+          this._isNavigatingBack = true;
+          this.clearNavigationState();
+          this.renderView('dashboard', true);
+          this._isNavigatingBack = false;
+        }
+      });
       
       const urlParams = new URLSearchParams(window.location.search);
       const viewParam = urlParams.get('view');
@@ -55,6 +77,8 @@ const App = {
       
       console.log("Rendering initial view:", this.currentView);
       document.getElementById('page-title').innerText = 'Dashboard';
+      // Replace initial history state
+      history.replaceState({ view: this.currentView, recordId: this.currentRecordId, eqId: this.currentEqId }, '');
       this.renderView(this.currentView);
       
     } catch (err) {
@@ -87,19 +111,74 @@ const App = {
     });
   },
 
+  // Clear stale navigation state to prevent "carico non trovato" and similar errors
+  clearNavigationState() {
+    this.currentRecordId = null;
+    this.currentEqId = null;
+  },
+
+  // Determine the parent view for a given detail view
+  getParentView(view) {
+    const parentMap = {
+      'trace_incoming_detail': 'trace_incoming',
+      'trace_ingredient_detail': 'trace_ingredients',
+      'trace_recipe_detail': 'trace_recipes',
+      'trace_supplier_detail': 'trace_suppliers',
+      'trace_client_detail': 'trace_clients',
+      'trace_sale_detail': 'trace_sales',
+      'trace_production_detail': 'trace_production',
+      'haccp_temp_detail': 'haccp_temp',
+      'haccp_sanitation_detail': 'haccp_sanitation',
+      'haccp_hygiene_detail': 'haccp_hygiene',
+      'haccp_nc_detail': 'haccp_nc',
+      'haccp_maintenance_detail': 'haccp_maintenance',
+      'haccp_structure_detail': 'haccp_structure',
+      'haccp_pest_detail': 'haccp_pest',
+      'haccp_training_detail': 'haccp_training',
+      'settings_model_detail': 'settings_models',
+    };
+    return parentMap[view] || null;
+  },
+
   navigateBack() {
-    if (this.viewHistory && this.viewHistory.length > 0) {
-      const prevView = this.viewHistory.pop();
-      this.renderView(prevView, true);
+    // Always clear stale state before navigating back
+    this.clearNavigationState();
+
+    // Try internal viewHistory first (skip any _detail entries with stale IDs)
+    while (this.viewHistory && this.viewHistory.length > 0) {
+      const prevEntry = this.viewHistory.pop();
+      const prevView = typeof prevEntry === 'string' ? prevEntry : prevEntry;
+      // Skip detail views (they need an ID which we just cleared)
+      if (prevView && !prevView.endsWith('_detail')) {
+        this.renderView(prevView, true);
+        return;
+      }
+    }
+    // Fallback: determine parent from current view
+    const parent = this.getParentView(this.currentView);
+    if (parent) {
+      this.renderView(parent, true);
     } else {
-      this.renderView('dashboard');
+      this.renderView('dashboard', true);
     }
   },
 
   renderView(view, skipHistory = false) {
     if (!skipHistory && this.currentView && this.currentView !== view) {
       if (!this.viewHistory) this.viewHistory = [];
-      this.viewHistory.push(this.currentView);
+      // Prevent duplicate consecutive entries in history
+      const lastEntry = this.viewHistory[this.viewHistory.length - 1];
+      if (lastEntry !== this.currentView) {
+        this.viewHistory.push(this.currentView);
+      }
+      // Limit history stack to prevent memory bloat
+      if (this.viewHistory.length > 50) {
+        this.viewHistory = this.viewHistory.slice(-30);
+      }
+    }
+    // Push browser history state (unless going back or initial load)
+    if (!skipHistory && !this._isNavigatingBack) {
+      history.pushState({ view: view, recordId: this.currentRecordId, eqId: this.currentEqId }, '');
     }
     // Always release the QR camera when navigating away
     this.stopQRScanner();
@@ -208,6 +287,22 @@ const App = {
         title.innerText = 'Lavoratori';
         main.innerHTML = this.views.settings_workers();
         break;
+      case 'haccp_pest':
+        title.innerText = 'Controllo Animali Infestanti';
+        main.innerHTML = this.views.haccp_pest();
+        break;
+      case 'haccp_pest_detail':
+        title.innerText = 'Dettaglio Controllo Infestanti';
+        main.innerHTML = this.views.haccp_pest_detail(this.currentRecordId);
+        break;
+      case 'haccp_training':
+        title.innerText = 'Formazione Lavoratori';
+        main.innerHTML = this.views.haccp_training();
+        break;
+      case 'haccp_training_detail':
+        title.innerText = 'Dettaglio Formazione Lavoratore';
+        main.innerHTML = this.views.haccp_training_detail(this.currentRecordId);
+        break;
       case 'haccp_structure':
         title.innerText = 'Ambienti e Strutture';
         main.innerHTML = this.views.haccp_structure();
@@ -227,6 +322,22 @@ const App = {
       case 'trace_supplier_detail':
         title.innerText = 'Dettaglio Fornitore';
         main.innerHTML = this.views.trace_supplier_detail(this.currentRecordId);
+        break;
+      case 'trace_clients':
+        title.innerText = 'Elenco Clienti';
+        main.innerHTML = this.views.trace_clients();
+        break;
+      case 'trace_client_detail':
+        title.innerText = 'Dettaglio Cliente';
+        main.innerHTML = this.views.trace_client_detail(this.currentRecordId);
+        break;
+      case 'trace_sales':
+        title.innerText = 'Registro Vendite (DDT)';
+        main.innerHTML = this.views.trace_sales();
+        break;
+      case 'trace_sale_detail':
+        title.innerText = 'Dettaglio Vendita (DDT)';
+        main.innerHTML = this.views.trace_sale_detail(this.currentRecordId);
         break;
       case 'trace_incoming_detail':
         title.innerText = 'Dettaglio Carico';
@@ -316,6 +427,26 @@ const App = {
     this.renderView('haccp_structure_detail');
   },
 
+  goToPestDetail(id) {
+    this.currentRecordId = id;
+    this.renderView('haccp_pest_detail');
+  },
+
+  goToTrainingDetail(id) {
+    this.currentRecordId = id;
+    this.renderView('haccp_training_detail');
+  },
+
+  deletePestRecord(id) {
+    if(confirm("Sei sicuro di voler eliminare questo controllo infestanti?")) {
+      Store.removeItem('haccp_pest', id);
+      if (typeof MediaStore !== 'undefined' && MediaStore.garbageCollect) {
+        MediaStore.garbageCollect().catch(err => console.error(err));
+      }
+      this.renderView('haccp_pest');
+    }
+  },
+
   goToIngredientDetail(id) {
     this.currentRecordId = id;
     this.renderView('trace_ingredient_detail');
@@ -329,6 +460,16 @@ const App = {
   goToSupplierDetail(id) {
     this.currentRecordId = id;
     this.renderView('trace_supplier_detail');
+  },
+
+  goToClientDetail(id) {
+    this.currentRecordId = id;
+    this.renderView('trace_client_detail');
+  },
+
+  goToSaleDetail(id) {
+    this.currentRecordId = id;
+    this.renderView('trace_sale_detail');
   },
 
   goToIncomingDetail(id) {
@@ -625,8 +766,49 @@ const App = {
   removeItem(tableName, id, returnView) {
     if(confirm("Sei sicuro di voler eliminare questo record?")) {
       Store.removeItem(tableName, id);
+      if (tableName === 'trace_shipments' && typeof MediaStore !== 'undefined' && MediaStore.garbageCollect) {
+        MediaStore.garbageCollect().catch(err => console.error(err));
+      }
       if (returnView) this.renderView(returnView);
       else this.renderView(this.currentView);
+    }
+  },
+
+  async purgeOldShipments() {
+    const shipments = Store.data.trace_shipments || [];
+    const now = new Date();
+
+    const removableShipments = shipments.filter(s => {
+      if (!s.depletedAt) return false;
+      const depletedAt = new Date(s.depletedAt);
+      const daysSinceDepleted = Math.floor((now - depletedAt) / (1000 * 60 * 60 * 24));
+      return daysSinceDepleted >= 30;
+    });
+
+    if (removableShipments.length === 0) {
+      alert("Nessun DDT da rimuovere.");
+      return;
+    }
+
+    if (confirm(`Sei sicuro di voler eliminare definitivamente ${removableShipments.length} DDT vecchi (terminati da oltre 30 giorni) e le relative immagini dallo storage per liberare spazio?`)) {
+      const removableIds = removableShipments.map(s => s.id);
+      
+      // Remove shipments from Store
+      Store.data.trace_shipments = Store.data.trace_shipments.filter(s => !removableIds.includes(s.id));
+      Store.save();
+      
+      // Notify SyncEngine for each deletion
+      if (typeof SyncEngine !== 'undefined') {
+        removableIds.forEach(id => SyncEngine.recordDelete('trace_shipments', id));
+      }
+
+      // Perform Media garbage collection to free IndexedDB space
+      if (typeof MediaStore !== 'undefined' && MediaStore.garbageCollect) {
+        await MediaStore.garbageCollect().catch(err => console.error(err));
+      }
+
+      alert("DDT obsoleti rimossi con successo.");
+      this.renderView('trace_archive');
     }
   },
 
@@ -733,7 +915,7 @@ const App = {
           <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
             <div style="cursor: pointer; color: var(--primary-color); font-weight: 600;" onclick="App.goToIncomingDetail('${selectedLotId}')">
               ${ing ? ing.name : 'Ingrediente sconosciuto'}
-              ${ing && ing.allergens && ing.allergens.length > 0 ? `<br><span style="font-size: 10px; color: var(--danger-color);">Allergeni: ${ing.allergens.join(', ')}</span>` : ''}
+              ${ing && (ing.allergenPresent === true || ing.allergen === true || (ing.allergens && ing.allergens.length > 0)) ? `<br><span style="font-size: 10px; color: var(--danger-color); font-weight: 600;">⚠️ Contiene Allergeni</span>` : ''}
               <div style="font-size: 10px; color: var(--text-secondary); margin-top: 2px;">(Clicca per foto Lotto/DDT)</div>
             </div>
             <div style="font-weight: 700; font-size: 13px;">${needed} ${ing ? ing.unit : ''}</div>
@@ -968,6 +1150,17 @@ const App = {
             <p style="font-weight: 600; color: var(--text-secondary); text-transform: uppercase; font-size: 12px; letter-spacing: 1px;">${company.ragioneSociale || 'Configura anagrafica in Impostazioni'}</p>
           </div>
 
+          ${openNC > 0 ? `
+          <div class="card alert" style="background: rgba(229,62,62,0.08); border: 2px solid var(--danger-color); border-radius: var(--radius-xl); padding: 15px; margin-bottom: 20px; display: flex; align-items: center; gap: 15px; cursor: pointer; animation: pulse 2s infinite ease-in-out;" onclick="App.renderView('haccp_nc')">
+            <div style="font-size: 28px; color: var(--danger-color); display: flex; align-items: center;"><i class="ph-fill ph-warning"></i></div>
+            <div style="flex: 1;">
+              <h4 style="color: var(--danger-color); margin-bottom: 2px; font-weight: bold; font-size: 14px;">ATTENZIONE: Non Conformità Aperte</h4>
+              <p style="color: var(--text-main); font-size: 13px; font-weight: 500;">Ci sono <strong>${openNC}</strong> Non Conformità attive che richiedono azioni correttive e chiusura.</p>
+            </div>
+            <i class="ph ph-caret-right" style="color: var(--danger-color); font-size: 20px;"></i>
+          </div>
+          ` : ''}
+
           <div class="dashboard-grid">
             <div class="widget ${haccpStatus.allOk ? 'ok' : 'alert'}" style="border: 2px solid ${haccpStatus.allOk ? 'transparent' : 'var(--danger-color)'};">
               <div class="widget-icon ${haccpStatus.allOk ? 'bg-green' : 'bg-red'}">
@@ -992,14 +1185,35 @@ const App = {
             </div>
           </div>
 
-          ${haccpStatus.missing && haccpStatus.missing.length > 0 ? `
-          <div class="card" style="border-left: 4px solid var(--danger-color);">
-            <h3 style="color: var(--danger-color);"><i class="ph-fill ph-warning-circle"></i> Registrazioni Mancanti</h3>
-            <ul style="padding-left: 20px; margin-top: 10px; color: var(--danger-color); font-weight: 500; font-size: 14px;">
-              ${haccpStatus.missing.map(m => `<li>${m}</li>`).join('')}
-            </ul>
-          </div>
-          ` : ''}
+          ${(() => {
+            const trainingRecords = Store.data.worker_training || [];
+            const courses = trainingRecords.filter(r => r.type === 'course');
+            const todayStr = new Date().toISOString().split('T')[0];
+            
+            const trainingWarnings = [];
+            courses.forEach(c => {
+              // c.triggerDate is computed as expiryDate - preavvisoDays (format YYYY-MM-DD)
+              // If current date >= triggerDate, trigger warning.
+              if (c.triggerDate && todayStr >= c.triggerDate) {
+                const w = Store.data.workers.find(x => x.id === c.workerId);
+                const workerName = w ? `${w.lastName} ${w.firstName}` : 'Lavoratore sconosciuto';
+                // Avviso format required: "Scadenza Prossima: Nome Lavoratore - Tipo di Corso il Data Scadenza effettiva (es. 15/07/2026)"
+                trainingWarnings.push(`Scadenza Prossima: ${workerName} - ${c.courseType} il ${App.formatDate(c.expiryDate)}`);
+              }
+            });
+
+            const allMissing = [...(haccpStatus.missing || []), ...trainingWarnings];
+            if (allMissing.length === 0) return '';
+
+            return `
+              <div class="card" style="border-left: 4px solid var(--danger-color);">
+                <h3 style="color: var(--danger-color);"><i class="ph-fill ph-warning-circle"></i> Registrazioni Mancanti</h3>
+                <ul style="padding-left: 20px; margin-top: 10px; color: var(--danger-color); font-weight: 500; font-size: 14px;">
+                  ${allMissing.map(m => `<li>${m}</li>`).join('')}
+                </ul>
+              </div>
+            `;
+          })()}
 
           <div class="card">
             <h3><i class="ph-fill ph-calendar-blank"></i> Lotti in Scadenza / Scaduti</h3>
@@ -1047,7 +1261,7 @@ const App = {
                   'haccp_maintenance': { label: 'Manutenzione', icon: 'ph-wrench', color: '#64748b', onclick: "App.renderView('haccp_maintenance')" },
                   'trace_recipes': { label: 'Ricettario', icon: 'ph-book-bookmark', color: '#3b82f6', onclick: "App.renderView('trace_recipes')" },
                   'trace_suppliers': { label: 'Fornitori', icon: 'ph-address-book', color: '#f59e0b', onclick: "App.renderView('trace_suppliers')" },
-                  'trace_ingredients': { label: 'Magazzino', icon: 'ph-warehouse', color: '#3b82f6', onclick: "App.renderView('trace_ingredients')" }
+                  'trace_ingredients': { label: 'Ingredienti', icon: 'ph-list-bullets', color: '#3b82f6', onclick: "App.renderView('trace_ingredients')" }
                 };
                 const action = actionMap[actionId];
                 if (!action) return '';
@@ -1092,6 +1306,14 @@ const App = {
           <div class="widget" onclick="App.renderView('haccp_maintenance')" style="cursor: pointer; padding: 15px;">
             <div class="widget-icon" style="background: #64748b; width: 40px; height: 40px; font-size: 20px;"><i class="ph-fill ph-wrench"></i></div>
             <div class="widget-value" style="font-size: 16px; margin-top: 5px;">Manutenzione</div>
+          </div>
+          <div class="widget" onclick="App.renderView('haccp_pest')" style="cursor: pointer; padding: 15px;">
+            <div class="widget-icon" style="background: #8b5cf6; width: 40px; height: 40px; font-size: 20px;"><i class="ph-fill ph-bug"></i></div>
+            <div class="widget-value" style="font-size: 16px; margin-top: 5px;">Infestanti</div>
+          </div>
+          <div class="widget" onclick="App.renderView('haccp_training')" style="cursor: pointer; padding: 15px;">
+            <div class="widget-icon" style="background: #06b6d4; width: 40px; height: 40px; font-size: 20px;"><i class="ph-fill ph-graduation-cap"></i></div>
+            <div class="widget-value" style="font-size: 16px; margin-top: 5px;">Formazione</div>
           </div>
         </div>
       `;
@@ -1161,7 +1383,7 @@ const App = {
         { id: 'trace_production', label: 'Produzione', section: 'Tracciabilità' },
         { id: 'trace_recipes', label: 'Ricettario', section: 'Tracciabilità' },
         { id: 'trace_suppliers', label: 'Fornitori', section: 'Tracciabilità' },
-        { id: 'trace_ingredients', label: 'Magazzino', section: 'Tracciabilità' },
+        { id: 'trace_ingredients', label: 'Ingredienti Generici', section: 'Tracciabilità' },
         { id: 'labels', label: 'Etichette Produzioni', section: 'Tracciabilità' }
       ];
 
@@ -1606,6 +1828,275 @@ const App = {
       `;
     },
 
+  haccp_pest() {
+      const records = Store.data.haccp_pest || [];
+      const filtered = records.sort((a,b) => new Date(b.date) - new Date(a.date));
+      return `
+        <div class="card">
+          <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
+          <h3><i class="ph-fill ph-bug"></i> Controllo Animali Infestanti</h3>
+          <div style="margin-top: 16px; margin-bottom: 20px;">
+            <button class="btn-primary" style="width: 100%;" onclick="App.openModal('pest')"><i class="ph ph-plus"></i> Nuovo Controllo</button>
+          </div>
+          <div class="list-container">
+            ${filtered.length > 0 ? filtered.map(r => `
+              <div class="list-item" style="padding: 12px; border-bottom: 1px solid var(--border-color); cursor: pointer;" onclick="App.goToPestDetail('${r.id}')">
+                <div style="flex: 1;">
+                  <div class="item-title">${App.formatDate(r.date)}</div>
+                  <div class="item-subtitle" style="font-size: 11px;">Operatore: ${r.operator} · Trappole: ${r.trapsCount}</div>
+                  <div class="item-subtitle ${r.status === 'CONFORME' ? 'text-conforme' : 'text-non-conforme'}">${r.status}</div>
+                </div>
+                <i class="ph ph-caret-right" style="color: var(--text-secondary);"></i>
+              </div>
+            `).join('') : '<p style="text-align: center; color: var(--text-secondary);">Nessun controllo registrato.</p>'}
+          </div>
+        </div>
+      `;
+    },
+
+  haccp_pest() {
+      const records = Store.data.haccp_pest || [];
+      const filtered = records.sort((a,b) => new Date(b.date) - new Date(a.date));
+      return `
+        <div class="card">
+          <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
+          <h3><i class="ph-fill ph-bug"></i> Controllo Animali Infestanti</h3>
+          <div style="margin-top: 16px; margin-bottom: 20px;">
+            <button class="btn-primary" style="width: 100%;" onclick="App.openModal('pest')"><i class="ph ph-plus"></i> Nuovo Controllo</button>
+          </div>
+          <div class="list-container">
+            ${filtered.length > 0 ? filtered.map(r => `
+              <div class="list-item" style="padding: 12px; border-bottom: 1px solid var(--border-color); cursor: pointer;" onclick="App.goToPestDetail('${r.id}')">
+                <div style="flex: 1;">
+                  <div class="item-title">${App.formatDate(r.date)}</div>
+                  <div class="item-subtitle" style="font-size: 11px;">Operatore: ${r.operator} · Trappole: ${r.trapsCount}</div>
+                  <div class="item-subtitle ${r.status === 'CONFORME' ? 'text-conforme' : 'text-non-conforme'}">${r.status}</div>
+                </div>
+                <i class="ph ph-caret-right" style="color: var(--text-secondary);"></i>
+              </div>
+            `).join('') : '<p style="text-align: center; color: var(--text-secondary);">Nessun controllo registrato.</p>'}
+          </div>
+        </div>
+      `;
+    },
+
+    haccp_training() {
+      const workers = Store.data.workers || [];
+      // Filter out inactive workers if any inactive field exists (defaulting to showing active)
+      const activeWorkers = workers.filter(w => !w.inactive);
+      return `
+        <div class="card">
+          <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
+          <h3><i class="ph-fill ph-graduation-cap"></i> Formazione Lavoratori</h3>
+          <p style="margin-bottom: 16px; font-size: 13px; color: var(--text-secondary);">Seleziona un lavoratore per visualizzare la scheda di dettaglio, gestire gli attestati dei corsi di formazione e l'addestramento HACCP.</p>
+          <div class="list-container">
+            ${activeWorkers.length > 0 ? activeWorkers.map(w => {
+              const records = (Store.data.worker_training || []).filter(r => r.workerId === w.id);
+              const coursesCount = records.filter(r => r.type === 'course').length;
+              const hasReport = records.some(r => r.type === 'report' && r.reportPhoto);
+              return `
+                <div class="list-item" style="padding: 14px; border-bottom: 1px solid var(--border-color); cursor: pointer;" onclick="App.goToTrainingDetail('${w.id}')">
+                  <div style="flex: 1;">
+                    <div class="item-title" style="font-weight: bold; font-size: 16px; color: var(--text-main);">${w.lastName} ${w.firstName}</div>
+                    <div class="item-subtitle" style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">Ruolo: ${w.role}</div>
+                    <div style="display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap;">
+                      <span class="badge" style="background: rgba(6,182,212,0.1); color: #06b6d4; font-size: 10px; padding: 2px 8px; border-radius: 12px;">Corsi: ${coursesCount}</span>
+                      <span class="badge" style="background: ${hasReport ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)'}; color: ${hasReport ? '#10b981' : '#ef4444'}; font-size: 10px; padding: 2px 8px; border-radius: 12px;">
+                        ${hasReport ? 'Verbale HACCP presente' : 'Nessun verbale HACCP'}
+                      </span>
+                    </div>
+                  </div>
+                  <i class="ph ph-caret-right" style="color: var(--text-secondary); font-size: 18px;"></i>
+                </div>
+              `;
+            }).join('') : '<p style="text-align: center; color: var(--text-secondary);">Nessun lavoratore configurato. Vai in Impostazioni > Lavoratori.</p>'}
+          </div>
+        </div>
+      `;
+    },
+
+    haccp_training_detail(workerId) {
+      const w = Store.data.workers.find(x => x.id === workerId);
+      if (!w) return `<div class="card"><p>Lavoratore non trovato.</p></div>`;
+
+      const records = Store.data.worker_training || [];
+      const courses = records.filter(r => r.workerId === workerId && r.type === 'course');
+      const report = records.find(r => r.workerId === workerId && r.type === 'report');
+
+      return `
+        <div class="card">
+          <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
+          
+          <div style="margin-bottom: 24px; border-bottom: 1px solid var(--border-color); padding-bottom: 16px;">
+            <h2 style="margin-bottom: 4px; color: var(--text-main); font-size: 24px;">${w.lastName} ${w.firstName}</h2>
+            <p style="font-size: 14px; color: var(--text-secondary);"><i class="ph ph-briefcase"></i> Ruolo: <strong>${w.role}</strong></p>
+          </div>
+
+          <!-- SEZIONE A: Corsi e Attestati -->
+          <div style="margin-bottom: 30px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+              <h3 style="font-size: 18px; margin: 0; color: var(--text-main);"><i class="ph ph-certificate"></i> Sezione A: Corsi e Attestati</h3>
+              <button class="btn-primary" style="width: auto; padding: 6px 12px; font-size: 12px;" onclick="App.openModal('training-course', '${workerId}')">
+                <i class="ph ph-plus"></i> Aggiungi Corso
+              </button>
+            </div>
+            
+            <div class="list-container">
+              ${courses.length > 0 ? courses.map(c => `
+                <div class="list-item" style="padding: 12px; border-bottom: 1px solid var(--border-color); flex-direction: column; align-items: stretch; gap: 8px;">
+                  <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                    <div>
+                      <div style="font-weight: bold; font-size: 15px; color: var(--text-main);">${c.courseType}</div>
+                      <div style="font-size: 12px; color: var(--text-secondary); margin-top: 4px;">
+                        Conseguito: ${App.formatDate(c.conceivedDate)} · Scadenza: ${App.formatDate(c.expiryDate)}
+                      </div>
+                      <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">
+                        Preavviso: ${c.preavviso} giorni prima
+                      </div>
+                    </div>
+                    <div style="display: flex; gap: 6px;">
+                      <button class="btn-icon" style="background: none; border: none; color: var(--primary-color); padding: 4px;" onclick="App.openModal('edit-training-course', '${c.id}')"><i class="ph ph-pencil" style="font-size: 18px;"></i></button>
+                      <button class="btn-icon" style="background: none; border: none; color: var(--danger-color); padding: 4px;" onclick="App.deleteTrainingCourse('${c.id}', '${workerId}')"><i class="ph ph-trash" style="font-size: 18px;"></i></button>
+                    </div>
+                  </div>
+                  
+                  ${c.certPhoto ? `
+                    <div style="display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.02); padding: 8px; border-radius: 8px; border: 1px solid var(--border-color); margin-top: 4px;">
+                      <div style="width: 50px; height: 50px; border-radius: 4px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: var(--bg-secondary); cursor: pointer;" onclick="App.enlargeImage('${c.certPhoto}')">
+                        <img data-media-key="${c.certPhoto}" src="" style="max-height: 50px; max-width: 50px; object-fit: cover;" />
+                      </div>
+                      <div style="flex: 1;">
+                        <span style="font-size: 12px; font-weight: bold; color: var(--text-main); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Attestato caricato</span>
+                        <a href="javascript:void(0)" onclick="App.enlargeImage('${c.certPhoto}')" style="font-size: 11px; color: var(--primary-color); font-weight: bold;">Visualizza documento</a>
+                      </div>
+                    </div>
+                  ` : `
+                    <div style="font-size: 12px; color: var(--danger-color); font-style: italic; background: rgba(239,68,68,0.03); padding: 8px; border-radius: 6px; border: 1px dashed rgba(239,68,68,0.2);">
+                      <i class="ph ph-warning"></i> Nessun documento di attestato caricato. Modifica per caricarlo.
+                    </div>
+                  `}
+                </div>
+              `).join('') : '<p style="text-align: center; color: var(--text-secondary); padding: 12px; border: 1px dashed var(--border-color); border-radius: 8px;">Nessun corso registrato per questo lavoratore.</p>'}
+            </div>
+          </div>
+
+          <!-- SEZIONE B: Addestramento Procedure HACCP -->
+          <div style="margin-bottom: 20px; border-top: 1px solid var(--border-color); padding-top: 24px;">
+            <h3 style="font-size: 18px; margin-bottom: 14px; color: var(--text-main);"><i class="ph ph-notebook"></i> Sezione B: Addestramento Procedure HACCP</h3>
+            
+            <div style="background: rgba(0,0,0,0.01); border: 1px solid var(--border-color); border-radius: 12px; padding: 16px;">
+              <div style="margin-bottom: 12px;">
+                <label style="font-weight: bold; font-size: 14px; color: var(--text-main); display: block; margin-bottom: 4px;">Verbale di Formazione Interna</label>
+                <span style="font-size: 12px; color: var(--text-secondary); display: block;">Carica il verbale firmato relativo alle procedure HACCP aziendali (PDF o foto).</span>
+              </div>
+              
+              <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+                <button type="button" class="btn-secondary" onclick="document.getElementById('training-report-file').click()" style="padding: 10px; font-size: 13px; width: auto;"><i class="ph ph-file-arrow-up"></i> Da File</button>
+                <button type="button" class="btn-secondary" onclick="document.getElementById('training-report-camera').click()" style="padding: 10px; font-size: 13px; width: auto;"><i class="ph ph-camera"></i> Da Foto</button>
+                ${report && report.reportPhoto ? `
+                  <button type="button" class="btn-danger" onclick="App.deleteTrainingReport('${report.id}', '${workerId}')" style="padding: 10px; font-size: 13px; width: auto;"><i class="ph ph-trash"></i> Rimuovi</button>
+                ` : ''}
+              </div>
+              <input type="file" id="training-report-file" accept="image/*,application/pdf" style="display: none;" onchange="App.handleTrainingReportPhoto(this, '${workerId}')" />
+              <input type="file" id="training-report-camera" accept="image/*" capture="environment" style="display: none;" onchange="App.handleTrainingReportPhoto(this, '${workerId}')" />
+
+              ${report && report.reportPhoto ? `
+                <div style="display: flex; align-items: center; gap: 12px; background: rgba(16,185,129,0.03); border: 1px solid var(--success-color); padding: 12px; border-radius: 8px; margin-top: 12px;">
+                  <div style="width: 60px; height: 60px; border-radius: 4px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: var(--bg-secondary); cursor: pointer;" onclick="App.enlargeImage('${report.reportPhoto}')">
+                    <img data-media-key="${report.reportPhoto}" src="" style="max-height: 60px; max-width: 60px; object-fit: cover;" />
+                  </div>
+                  <div style="flex: 1;">
+                    <span style="font-size: 13px; font-weight: bold; color: var(--text-main); display: block;">Verbale di addestramento presente</span>
+                    <span style="font-size: 11px; color: var(--text-secondary); display: block; margin-top: 2px;">Caricato il: ${App.formatDate(report.createdAt)}</span>
+                    <a href="javascript:void(0)" onclick="App.enlargeImage('${report.reportPhoto}')" style="font-size: 12px; color: var(--primary-color); font-weight: bold; display: inline-block; margin-top: 4px;">Visualizza verbale completo</a>
+                  </div>
+                </div>
+              ` : `
+                <div style="text-align: center; padding: 20px; border: 2px dashed var(--border-color); border-radius: 8px; background: rgba(0,0,0,0.01); margin-top: 12px; color: var(--text-secondary);">
+                  <i class="ph ph-image-square" style="font-size: 28px; margin-bottom: 6px; display: block; color: var(--text-secondary);"></i>
+                  <span style="font-size: 13px; font-weight: 500;">Nessun verbale caricato per questo lavoratore</span>
+                </div>
+              `}
+            </div>
+          </div>
+        </div>
+      `;
+    },
+
+    haccp_pest_detail(id) {
+      const r = Store.data.haccp_pest.find(x => x.id === id);
+      if(!r) return `<div class="card"><p>Controllo non trovato.</p></div>`;
+
+      return `
+        <div class="card">
+          <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
+          
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px;">
+            <div>
+              <h2 style="margin-bottom: 4px;">Controllo Infestanti</h2>
+              <p style="font-size: 14px; color: var(--text-secondary);">${App.formatDate(r.date)} - Operatore: ${r.operator}</p>
+            </div>
+            <div class="status-badge ${r.status === 'CONFORME' ? 'status-ok' : 'status-alert'}">
+              ${r.status}
+            </div>
+          </div>
+
+          ${r.mapPhoto ? `
+          <div style="background: rgba(0,0,0,0.02); border-radius: 12px; border: 1px solid var(--border-color); overflow: hidden; margin-bottom: 20px; display: flex; flex-direction: column; align-items: center; padding: 10px;">
+            <div style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 8px; font-weight: bold;"><i class="ph ph-map-trifold"></i> Planimetria Posizionamento Trappole</div>
+            <div style="max-height: 250px; width: 100%; border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; background: var(--bg-secondary); cursor: pointer;" onclick="App.enlargeImage('${r.mapPhoto}')">
+              <img data-media-key="${r.mapPhoto}" src="" style="max-height: 250px; max-width: 100%; object-fit: contain;" />
+            </div>
+          </div>
+          ` : `
+          <div style="background: rgba(0,0,0,0.02); padding: 15px; border-radius: 12px; margin-bottom: 20px; text-align: center; font-size: 13px; color: var(--text-secondary);">
+            <i class="ph ph-image-square" style="font-size: 24px;"></i><br>Nessuna planimetria caricata in questo controllo.
+          </div>
+          `}
+
+          <div style="background: rgba(0,0,0,0.02); padding: 15px; border-radius: 12px; margin-bottom: 20px;">
+            <h4 style="margin-bottom: 12px; font-size: 14px; text-transform: uppercase; color: var(--text-secondary);">Dettagli Monitoraggio</h4>
+            
+            <div style="display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,0.05);">
+              <div style="font-size: 14px; font-weight: 500;">Numero Trappole Installate</div>
+              <div style="font-weight: bold; font-family: monospace;">${r.trapsCount}</div>
+            </div>
+
+            <div style="display: flex; flex-direction: column; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,0.05);">
+              <div style="font-size: 12px; color: var(--text-secondary); text-transform: uppercase;">Segni di presenza roditori</div>
+              <div style="font-size: 14px; font-weight: 600; margin-top: 2px; color: ${r.rodentSigns !== 'Assenti' ? 'var(--danger-color)' : 'var(--text-main)'}">${r.rodentSigns}</div>
+            </div>
+
+            <div style="display: flex; flex-direction: column; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,0.05);">
+              <div style="font-size: 12px; color: var(--text-secondary); text-transform: uppercase;">Avvistamenti diretti</div>
+              <div style="font-size: 14px; font-weight: 600; margin-top: 2px; color: ${r.directSightings !== 'Nessun avvistamento' ? 'var(--danger-color)' : 'var(--text-main)'}">${r.directSightings}</div>
+            </div>
+
+            <div style="display: flex; flex-direction: column; padding: 8px 0; border-bottom: 1px solid rgba(0,0,0,0.05);">
+              <div style="font-size: 12px; color: var(--text-secondary); text-transform: uppercase;">Controllo trappole</div>
+              <div style="font-size: 14px; font-weight: 600; margin-top: 2px; color: ${r.trapStatus !== 'Tutte le trappole integre e attive' ? 'var(--danger-color)' : 'var(--text-main)'}">${r.trapStatus}</div>
+            </div>
+
+            <div style="display: flex; flex-direction: column; padding: 8px 0;">
+              <div style="font-size: 12px; color: var(--text-secondary); text-transform: uppercase;">Animali striscianti</div>
+              <div style="font-size: 14px; font-weight: 600; margin-top: 2px; color: ${r.crawlingInsects !== 'Assenti' ? 'var(--danger-color)' : 'var(--text-main)'}">${r.crawlingInsects}</div>
+            </div>
+          </div>
+
+          ${r.notes ? `
+          <div style="border-left: 4px solid var(--danger-color); background: rgba(229,62,62,0.05); padding: 15px; border-radius: 0 12px 12px 0; margin-bottom: 20px;">
+            <h4 style="color: var(--danger-color); margin-bottom: 5px; font-size: 14px; text-transform: uppercase;"><i class="ph ph-warning"></i> Dettagli Anomalie / Non Conformità</h4>
+            <p style="font-size: 14px; font-weight: 500; color: var(--text-main);">${r.notes}</p>
+          </div>
+          ` : ''}
+
+          <div style="display: flex; gap: 10px; margin-top: 24px;">
+            <button class="btn-danger" style="flex: 1;" onclick="App.deletePestRecord('${r.id}')"><i class="ph ph-trash"></i> Elimina</button>
+          </div>
+        </div>
+      `;
+    },
+
     reports() {
       return `
         <div class="card">
@@ -1616,13 +2107,17 @@ const App = {
              <button class="btn-secondary" onclick="App.openPrintModal('haccp_sanitation', 'Registro Sanificazione')"><i class="ph ph-sparkle"></i> Sanificazione</button>
              <button class="btn-secondary" onclick="App.openPrintModal('haccp_hygiene', 'Registro Igiene Personale')"><i class="ph ph-users"></i> Igiene Personale</button>
              <button class="btn-secondary" onclick="App.openPrintModal('haccp_noncompliance', 'Registro Non Conformit\u00e0')"><i class="ph ph-warning-circle"></i> Non Conformit\u00e0</button>
-             <button class="btn-secondary" onclick="App.openPrintModal('haccp_structure', 'Registro Ambienti e Strutture')"><i class="ph ph-house-line"></i> Ambienti e Strutture</button>          </div>
+             <button class="btn-secondary" onclick="App.openPrintModal('haccp_structure', 'Registro Ambienti e Strutture')"><i class="ph ph-house-line"></i> Ambienti e Strutture</button>
+             <button class="btn-secondary" onclick="App.openPrintModal('haccp_pest', 'Registro Controllo Infestanti')"><i class="ph ph-bug"></i> Controllo Infestanti</button>
+             <button class="btn-secondary" onclick="App.openPrintModal('worker_training', 'Registro Formazione Lavoratori')"><i class="ph ph-graduation-cap"></i> Formazione Lavoratori</button>
+          </div>
           <h3 style="margin-top: 30px;"><i class="ph-fill ph-package"></i> Report Tracciabilità</h3>
           <div style="display: flex; flex-direction: column; gap: 12px; margin-top: 16px;">
+             <button class="btn-secondary" onclick="App.exportTraceabilityPDF('ingredients')"><i class="ph ph-list-bullets"></i> Ingredienti Generici</button>
+             <button class="btn-secondary" onclick="App.openPrintModal('trace_incoming', 'Registro Carico Merci')"><i class="ph ph-truck"></i> Carico Merci</button>
              <button class="btn-secondary" onclick="App.exportTraceabilityPDF('recipes')"><i class="ph ph-book-bookmark"></i> Ricettario</button>
              <button class="btn-secondary" onclick="App.exportTraceabilityPDF('suppliers')"><i class="ph ph-address-book"></i> Fornitori</button>
              <button class="btn-secondary" onclick="App.exportTraceabilityPDF('production')"><i class="ph ph-cooking-pot"></i> Produzione</button>
-             <button class="btn-secondary" onclick="App.exportTraceabilityPDF('inventory')"><i class="ph ph-warehouse"></i> Magazzino</button>
           </div>
         </div>
       `;
@@ -1644,12 +2139,20 @@ const App = {
             <div class="widget-value" style="font-size: 16px; margin-top: 5px;">Fornitori</div>
           </div>
           <div class="widget" onclick="App.renderView('trace_ingredients')" style="cursor: pointer; padding: 15px;">
-            <div class="widget-icon bg-blue" style="width: 40px; height: 40px; font-size: 20px;"><i class="ph-fill ph-warehouse"></i></div>
-            <div class="widget-value" style="font-size: 16px; margin-top: 5px;">Magazzino</div>
+            <div class="widget-icon bg-blue" style="width: 40px; height: 40px; font-size: 20px;"><i class="ph-fill ph-list-bullets"></i></div>
+            <div class="widget-value" style="font-size: 16px; margin-top: 5px;">Ingredienti Generici</div>
           </div>
           <div class="widget" onclick="App.renderView('trace_production')" style="cursor: pointer; padding: 15px;">
             <div class="widget-icon bg-green" style="width: 40px; height: 40px; font-size: 20px;"><i class="ph-fill ph-cooking-pot"></i></div>
             <div class="widget-value" style="font-size: 16px; margin-top: 5px;">Produzione</div>
+          </div>
+          <div class="widget" onclick="App.renderView('trace_clients')" style="cursor: pointer; padding: 15px;">
+            <div class="widget-icon bg-orange" style="width: 40px; height: 40px; font-size: 20px;"><i class="ph-fill ph-users"></i></div>
+            <div class="widget-value" style="font-size: 16px; margin-top: 5px;">Clienti</div>
+          </div>
+          <div class="widget" onclick="App.renderView('trace_sales')" style="cursor: pointer; padding: 15px;">
+            <div class="widget-icon bg-green" style="width: 40px; height: 40px; font-size: 20px;"><i class="ph-fill ph-shopping-cart"></i></div>
+            <div class="widget-value" style="font-size: 16px; margin-top: 5px;">Vendite (DDT)</div>
           </div>
           <div class="widget" onclick="App.renderView('trace_archive')" style="cursor: pointer; padding: 15px;">
             <div class="widget-icon bg-red" style="width: 40px; height: 40px; font-size: 20px;"><i class="ph-fill ph-folder-open"></i></div>
@@ -1702,11 +2205,17 @@ const App = {
       // Recupero info ingredienti e allergeni
       const ingredients = (r.ingredients || []).map(ri => {
         const ing = (Store.data.ingredients || []).find(i => i.id === ri.ingredientId);
+        let allergenList = [];
+        if (ing) {
+          if (ing.allergenPresent === true || ing.allergen === true || (ing.allergens && ing.allergens.length > 0)) {
+            allergenList = ['Allergene'];
+          }
+        }
         return {
           name: ing ? ing.name : 'Sconosciuto',
           quantity: ri.quantity,
           unit: ing ? ing.unit : '?',
-          allergens: ing ? ing.allergens : []
+          allergens: allergenList
         };
       }).sort((a,b) => parseFloat(b.quantity) - parseFloat(a.quantity));
 
@@ -1796,14 +2305,17 @@ const App = {
       const g = (Store.data.incoming_goods || []).find(x => x.id === id);
       if(!g) return `<div class="card"><p>Carico non trovato.</p></div>`;
 
+      // --- Calcoli Quantitativi ---
+      const qtyAcquistata = parseFloat(g.quantity) || 0;
+
       const rawUsed = (Store.data.productions || []).filter(p => p.ingredients && p.ingredients.some(i => i.incomingId === id));
       const usedMovements = rawUsed.map(p => {
          const item = p.ingredients.find(i => i.incomingId === id);
          return {
             date: p.date || p.createdAt,
             qty: parseFloat(item.quantity) || 0,
-            label: `Produzione: ${p.recipeName || 'N/D'}`,
-            sublabel: `Lotto Prod: ${p.lot}`,
+            label: p.recipeName || 'N/D',
+            sublabel: `Lotto Prod: ${p.lot || 'N/D'}`,
             prodId: p.id,
             type: 'OUT'
          };
@@ -1813,64 +2325,216 @@ const App = {
       const adjMovements = adjustments.map(a => ({
          date: a.date,
          qty: parseFloat(a.quantity) || 0,
-         label: 'Quantità persa (Rettifica)',
-         sublabel: a.reason || 'Manuale',
+         label: a.reason || 'Perdita/Sfrido',
+         sublabel: a.note || '',
          type: 'ADJ'
       }));
 
       const totalUsed = usedMovements.reduce((acc, curr) => acc + curr.qty, 0);
       const totalLost = adjMovements.reduce((acc, curr) => acc + curr.qty, 0);
-      const currentStock = parseFloat(g.quantity) - totalUsed - totalLost;
+      const giacenzaAttuale = qtyAcquistata - totalUsed - totalLost;
+      const consumedPct = qtyAcquistata > 0 ? Math.min(((totalUsed + totalLost) / qtyAcquistata) * 100, 100) : 0;
 
+      // Ordinamento decrescente per data
       const allMovements = [...usedMovements, ...adjMovements].sort((a,b) => new Date(b.date) - new Date(a.date));
+
+      // Colori stato giacenza
+      const stockColor = giacenzaAttuale <= 0 ? 'var(--danger-color)' : giacenzaAttuale < qtyAcquistata * 0.2 ? '#e67e22' : 'var(--success-color, #27ae60)';
+      const stockBg = giacenzaAttuale <= 0 ? 'rgba(231,76,60,0.08)' : giacenzaAttuale < qtyAcquistata * 0.2 ? 'rgba(230,126,34,0.08)' : 'rgba(39,174,96,0.08)';
+      const stockLabel = giacenzaAttuale <= 0 ? 'ESAURITO' : giacenzaAttuale < qtyAcquistata * 0.2 ? 'IN ESAURIMENTO' : 'DISPONIBILE';
+
+      // Data scadenza
+      const expiryDate = new Date(g.expiry);
+      const today = new Date();
+      const daysToExpiry = Math.ceil((expiryDate - today) / (1000 * 60 * 60 * 24));
+      const expiryColor = daysToExpiry <= 0 ? 'var(--danger-color)' : daysToExpiry <= 7 ? '#e67e22' : 'var(--text-secondary)';
+      const expiryLabel = daysToExpiry <= 0 ? 'SCADUTO' : daysToExpiry <= 7 ? `Scade tra ${daysToExpiry}gg` : '';
 
       return `
         <div class="card">
-          <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.goToIngredientDetail('${g.ingredientId}')"><i class="ph ph-arrow-left"></i> Indietro</button>
+          <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
           
+          <!-- ═══════════════ INTESTAZIONE ═══════════════ -->
+          <div style="margin-bottom: 20px; padding-bottom: 16px; border-bottom: 2px solid var(--border-color);">
+            <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+              <div style="width: 48px; height: 48px; border-radius: 14px; background: linear-gradient(135deg, var(--primary-color), #6c5ce7); display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                <i class="ph-fill ph-package" style="color: white; font-size: 22px;"></i>
+              </div>
+              <div style="flex: 1; min-width: 0;">
+                <h2 style="margin: 0; font-size: 20px; line-height: 1.2;">${g.ingredientName}</h2>
+                <p style="font-size: 13px; color: var(--text-secondary); margin: 2px 0 0;">Fornitore: <strong>${g.supplierName}</strong></p>
+              </div>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px;">
+              <span style="background: var(--primary-color); color: white; padding: 3px 12px; border-radius: 20px; font-size: 11px; font-weight: 700;">
+                <i class="ph ph-barcode"></i> Lotto Int: ${g.lotInterno || 'N/D'}
+              </span>
+              <span style="background: rgba(0,0,0,0.06); color: var(--text-secondary); padding: 3px 12px; border-radius: 20px; font-size: 11px; font-weight: 600;">
+                <i class="ph ph-calendar"></i> Acquistato: ${new Date(g.date).toLocaleDateString()}
+              </span>
+              <span style="background: ${daysToExpiry <= 7 ? 'rgba(231,76,60,0.1)' : 'rgba(0,0,0,0.06)'}; color: ${expiryColor}; padding: 3px 12px; border-radius: 20px; font-size: 11px; font-weight: 600;">
+                <i class="ph ph-timer"></i> Scad: ${expiryDate.toLocaleDateString()} ${expiryLabel ? '(' + expiryLabel + ')' : ''}
+              </span>
+            </div>
+          </div>
+
+          <!-- ═══════════════ SEZIONE 1: KPI QUANTITATIVI ═══════════════ -->
           <div style="margin-bottom: 24px;">
-            <h2 style="margin-bottom: 4px;">${g.ingredientName}</h2>
-            <p style="font-size: 14px; color: var(--text-secondary);">Fornitore: <strong>${g.supplierName}</strong></p>
-            <p style="font-size: 14px; font-weight: bold; color: var(--primary-color);">Lotto Interno: ${g.lotInterno || 'N/D'}</p>
+            <h4 style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 12px; letter-spacing: 0.5px;">
+              <i class="ph-fill ph-chart-bar"></i> Controllo Scorte
+            </h4>
+
+            <!-- Riga 1: Quantità Acquistata + Giacenza Attuale -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
+              <!-- QUANTITÀ ACQUISTATA (INIZIALE) -->
+              <div style="background: rgba(52,152,219,0.08); padding: 14px 12px; border-radius: 14px; text-align: center; border: 1.5px solid rgba(52,152,219,0.2);">
+                <div style="font-size: 10px; text-transform: uppercase; color: #3498db; font-weight: 700; margin-bottom: 6px; letter-spacing: 0.5px;">
+                  <i class="ph-fill ph-shopping-cart"></i> Acquistata
+                </div>
+                <div style="font-size: 24px; font-weight: 800; color: #2980b9; line-height: 1;">
+                  ${qtyAcquistata.toFixed(3)}
+                </div>
+                <div style="font-size: 12px; color: #3498db; font-weight: 600; margin-top: 3px;">${g.unit}</div>
+              </div>
+
+              <!-- GIACENZA ATTUALE -->
+              <div style="background: ${stockBg}; padding: 14px 12px; border-radius: 14px; text-align: center; border: 1.5px solid ${stockColor}30; position: relative;">
+                <div style="font-size: 10px; text-transform: uppercase; color: ${stockColor}; font-weight: 700; margin-bottom: 6px; letter-spacing: 0.5px;">
+                  <i class="ph-fill ph-cube"></i> Giacenza Attuale
+                </div>
+                <div style="font-size: 24px; font-weight: 800; color: ${stockColor}; line-height: 1;">
+                  ${giacenzaAttuale.toFixed(3)}
+                </div>
+                <div style="font-size: 12px; color: ${stockColor}; font-weight: 600; margin-top: 3px;">${g.unit}</div>
+                <div style="position: absolute; top: 6px; right: 8px;">
+                  <span style="background: ${stockColor}; color: white; padding: 2px 7px; border-radius: 8px; font-size: 8px; font-weight: 800; letter-spacing: 0.3px;">${stockLabel}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Riga 2: Utilizzata + Perdite/Sfridi -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px;">
+              <!-- UTILIZZATA IN PRODUZIONI -->
+              <div style="background: rgba(0,0,0,0.025); padding: 12px; border-radius: 12px; text-align: center;">
+                <div style="font-size: 10px; text-transform: uppercase; color: var(--text-secondary); font-weight: 700; margin-bottom: 4px; letter-spacing: 0.3px;">
+                  <i class="ph-fill ph-factory"></i> In Produzioni
+                </div>
+                <div style="font-size: 18px; font-weight: 700; color: #8e44ad; line-height: 1;">
+                  ${totalUsed.toFixed(3)}
+                </div>
+                <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">${g.unit} (${usedMovements.length} ${usedMovements.length === 1 ? 'utilizzo' : 'utilizzi'})</div>
+              </div>
+
+              <!-- PERDITE / SFRIDI -->
+              <div style="background: rgba(0,0,0,0.025); padding: 12px; border-radius: 12px; text-align: center;">
+                <div style="font-size: 10px; text-transform: uppercase; color: var(--text-secondary); font-weight: 700; margin-bottom: 4px; letter-spacing: 0.3px;">
+                  <i class="ph-fill ph-trash"></i> Perdite / Sfridi
+                </div>
+                <div style="font-size: 18px; font-weight: 700; color: ${totalLost > 0 ? 'var(--danger-color)' : 'var(--text-secondary)'}; line-height: 1;">
+                  ${totalLost.toFixed(3)}
+                </div>
+                <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">${g.unit} (${adjMovements.length} ${adjMovements.length === 1 ? 'rettifica' : 'rettifiche'})</div>
+              </div>
+            </div>
+
+            <!-- Barra di consumo -->
+            <div style="background: rgba(0,0,0,0.06); border-radius: 8px; height: 10px; overflow: hidden; position: relative;">
+              <div style="height: 100%; border-radius: 8px; width: ${consumedPct}%; background: linear-gradient(90deg, #8e44ad ${totalUsed > 0 && totalLost > 0 ? (totalUsed / (totalUsed + totalLost) * 100) + '%' : '100%'}, var(--danger-color)); transition: width 0.5s ease;"></div>
+            </div>
+            <div style="display: flex; justify-content: space-between; margin-top: 5px;">
+              <span style="font-size: 10px; color: var(--text-secondary);">0 ${g.unit}</span>
+              <span style="font-size: 10px; color: var(--text-secondary); font-weight: 600;">Consumato: ${consumedPct.toFixed(1)}%</span>
+              <span style="font-size: 10px; color: var(--text-secondary);">${qtyAcquistata.toFixed(3)} ${g.unit}</span>
+            </div>
+
+            <!-- Formula -->
+            <div style="background: rgba(0,0,0,0.03); padding: 10px 14px; border-radius: 10px; margin-top: 12px; border-left: 3px solid var(--primary-color);">
+              <div style="font-size: 10px; text-transform: uppercase; color: var(--text-secondary); font-weight: 700; margin-bottom: 4px;">
+                <i class="ph ph-math-operations"></i> Formula di Calcolo
+              </div>
+              <div style="font-size: 12px; font-family: monospace; color: var(--text-primary);">
+                <strong>${giacenzaAttuale.toFixed(3)}</strong> = ${qtyAcquistata.toFixed(3)} − ${totalUsed.toFixed(3)} − ${totalLost.toFixed(3)}
+              </div>
+              <div style="font-size: 10px; color: var(--text-secondary); margin-top: 2px; font-style: italic;">
+                Giacenza = Acquistata − Produzioni − Perdite
+              </div>
+            </div>
           </div>
 
-          <div class="dashboard-grid" style="grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px;">
-            <div style="background: rgba(0,0,0,0.02); padding: 15px; border-radius: 12px; text-align: center; border: 2px solid ${currentStock <= 0 ? 'var(--danger-color)' : 'var(--primary-color)'};">
-              <h4 style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 5px;">Giacenza Attuale</h4>
-              <p style="font-size: 18px; font-weight: 800; color: ${currentStock <= 0 ? 'var(--danger-color)' : 'var(--primary-color)'};">${currentStock.toFixed(3)} ${g.unit}</p>
-              <p style="font-size: 11px; color: var(--text-secondary); margin-top: 4px;">Iniziale: ${g.quantity} ${g.unit}</p>
-            </div>
-            <div style="background: rgba(0,0,0,0.02); padding: 15px; border-radius: 12px; text-align: center;">
-              <h4 style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 5px;">Scadenza</h4>
-              <p style="font-size: 16px; font-weight: 700;">${new Date(g.expiry).toLocaleDateString()}</p>
-            </div>
-          </div>
-
-          <div style="background: rgba(0,0,0,0.02); padding: 15px; border-radius: 12px; margin-bottom: 24px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-              <h4 style="font-size: 12px; text-transform: uppercase; color: var(--text-secondary);"><i class="ph-fill ph-clock-counter-clockwise"></i> Utilizzi in Produzione / Perdite</h4>
-              <button class="btn-primary" style="padding: 4px 10px; font-size: 12px; width: auto;" onclick="App.adjustIncomingStock('${g.id}')">
-                <i class="ph ph-minus"></i> Dichiara Persa
+          <!-- ═══════════════ SEZIONE 2: STORICO MOVIMENTAZIONI ═══════════════ -->
+          <div style="background: rgba(0,0,0,0.02); padding: 16px; border-radius: 14px; margin-bottom: 24px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+              <h4 style="font-size: 12px; text-transform: uppercase; color: var(--text-secondary); letter-spacing: 0.5px; margin: 0;">
+                <i class="ph-fill ph-clock-counter-clockwise"></i> Storico Movimentazioni
+                <span style="background: var(--primary-color); color: white; padding: 1px 8px; border-radius: 10px; font-size: 10px; margin-left: 6px;">${allMovements.length}</span>
+              </h4>
+              <button class="btn-primary" style="padding: 5px 12px; font-size: 11px; width: auto; border-radius: 10px;" onclick="App.adjustIncomingStock('${g.id}')">
+                <i class="ph ph-minus-circle"></i> Dichiara Persa
               </button>
             </div>
-            <div class="movements-container" style="display: flex; flex-direction: column; gap: 12px;">
-              ${allMovements.map(m => `
-                <div style="display: flex; justify-content: space-between; align-items: center; padding-bottom: 10px; border-bottom: 1px dashed rgba(0,0,0,0.05); ${m.type === 'OUT' ? 'cursor: pointer;' : ''}" ${m.type === 'OUT' ? `onclick="App.goToProductionDetail('${m.prodId}')"` : ''}>
-                  <div>
-                    <div style="font-size: 13px; font-weight: 600;">${m.label}</div>
-                    <div style="font-size: 11px; color: var(--text-secondary);">
-                      Data: ${new Date(m.date).toLocaleDateString()} | ${m.sublabel}
-                    </div>
-                  </div>
-                  <div style="font-weight: 700; color: var(--danger-color)">
-                    -${m.qty.toFixed(3)} ${g.unit}
-                  </div>
+
+            ${allMovements.length === 0 
+              ? `<div style="text-align: center; padding: 30px 20px;">
+                   <i class="ph ph-clipboard-text" style="font-size: 36px; color: var(--text-secondary); opacity: 0.4;"></i>
+                   <p style="font-size: 13px; color: var(--text-secondary); margin-top: 8px; font-style: italic;">Nessun utilizzo o perdita registrata per questo lotto.</p>
+                 </div>`
+              : `<div style="display: flex; flex-direction: column; gap: 8px;">
+                  ${allMovements.map((m, idx) => {
+                    const isOut = m.type === 'OUT';
+                    const icon = isOut ? 'ph-fill ph-factory' : 'ph-fill ph-warning-circle';
+                    const color = isOut ? '#8e44ad' : 'var(--danger-color)';
+                    const bgColor = isOut ? 'rgba(142,68,173,0.06)' : 'rgba(231,76,60,0.06)';
+                    const typeLabel = isOut ? 'PRODUZIONE' : 'PERDITA / SFRIDO';
+                    const movDate = new Date(m.date);
+                    return `
+                      <div style="background: ${bgColor}; border-radius: 12px; padding: 12px 14px; border-left: 3px solid ${color}; ${isOut ? 'cursor: pointer;' : ''}" ${isOut ? `onclick="App.goToProductionDetail('${m.prodId}')"` : ''}>
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                          <div style="display: flex; gap: 10px; align-items: flex-start; flex: 1; min-width: 0;">
+                            <div style="width: 32px; height: 32px; border-radius: 10px; background: ${color}15; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px;">
+                              <i class="${icon}" style="color: ${color}; font-size: 15px;"></i>
+                            </div>
+                            <div style="flex: 1; min-width: 0;">
+                              <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 3px;">
+                                <span style="font-size: 9px; text-transform: uppercase; font-weight: 800; color: ${color}; letter-spacing: 0.5px;">${typeLabel}</span>
+                              </div>
+                              <div style="font-size: 13px; font-weight: 700; color: var(--text-primary); margin-bottom: 2px;">${m.label}</div>
+                              <div style="font-size: 11px; color: var(--text-secondary);">
+                                <i class="ph ph-calendar-blank"></i> ${movDate.toLocaleDateString()} · ${movDate.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                ${m.sublabel ? ' · ' + m.sublabel : ''}
+                              </div>
+                            </div>
+                          </div>
+                          <div style="text-align: right; flex-shrink: 0; margin-left: 10px;">
+                            <div style="font-size: 16px; font-weight: 800; color: ${color};">
+                              ${m.qty.toFixed(3)}
+                            </div>
+                            <div style="font-size: 10px; color: var(--text-secondary); font-weight: 600;">${g.unit}</div>
+                          </div>
+                        </div>
+                        ${isOut ? '<div style="text-align: right; margin-top: 4px;"><span style="font-size: 10px; color: ' + color + '; opacity: 0.7;"><i class=\\"ph ph-arrow-right\\"></i> Vai alla produzione</span></div>' : ''}
+                      </div>
+                    `;
+                  }).join('')}
+                </div>`
+            }
+
+            <!-- Riepilogo in calce alla sezione movimenti -->
+            ${allMovements.length > 0 ? `
+              <div style="display: flex; justify-content: space-around; margin-top: 14px; padding-top: 12px; border-top: 1px dashed rgba(0,0,0,0.1);">
+                <div style="text-align: center;">
+                  <div style="font-size: 10px; color: #8e44ad; text-transform: uppercase; font-weight: 700;">Tot. Produzioni</div>
+                  <div style="font-size: 14px; font-weight: 800; color: #8e44ad;">${totalUsed.toFixed(3)} ${g.unit}</div>
                 </div>
-              `).join('')}
-              ${allMovements.length === 0 ? '<p style="text-align: center; font-style: italic; font-size: 13px; color: var(--text-secondary);">Nessun utilizzo o perdita registrata per questo lotto.</p>' : ''}
-            </div>
+                <div style="width: 1px; background: rgba(0,0,0,0.1);"></div>
+                <div style="text-align: center;">
+                  <div style="font-size: 10px; color: var(--danger-color); text-transform: uppercase; font-weight: 700;">Tot. Perdite</div>
+                  <div style="font-size: 14px; font-weight: 800; color: var(--danger-color);">${totalLost.toFixed(3)} ${g.unit}</div>
+                </div>
+              </div>
+            ` : ''}
           </div>
 
+          <!-- ═══════════════ QR CODE ═══════════════ -->
           <div style="background: rgba(0,0,0,0.02); padding: 15px; border-radius: 12px; text-align: center; margin-bottom: 24px;">
              <h4 style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 10px;">QR Code Tracciabilità</h4>
              <div id="incoming-qrcode" style="display: flex; justify-content: center;"></div>
@@ -1878,6 +2542,7 @@ const App = {
              <button class="btn-primary" style="margin-top: 15px; width: 100%;" onclick="App.printIncomingLabel('${g.id}')"><i class="ph ph-printer"></i> Stampa Etichetta</button>
           </div>
 
+          <!-- ═══════════════ DOCUMENTAZIONE FOTOGRAFICA ═══════════════ -->
           <div style="margin-bottom: 24px;">
             <h4 style="font-size: 12px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 12px;"><i class="ph ph-image"></i> Documentazione Fotografica</h4>
             
@@ -1900,6 +2565,7 @@ const App = {
             </div>
           </div>
 
+          <!-- ═══════════════ AZIONI ═══════════════ -->
           <div style="display: flex; gap: 12px;">
             <button class="btn-secondary" style="flex: 1; height: 50px;" onclick="App.openModal('edit-incoming', '${g.id}')">
               <i class="ph-fill ph-pencil-simple"></i> Modifica
@@ -1994,30 +2660,188 @@ const App = {
       `;
     },
 
-    trace_ingredients() {
-      const inventory = Store.getInventory();
+    trace_clients() {
+      const clients = Store.data.clients || [];
       return `
         <div class="card">
           <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
-          <h3><i class="ph-fill ph-warehouse"></i> Magazzino Ingredienti</h3>
-          <p>Monitoraggio scorte in tempo reale e movimentazioni.</p>
+          <h3><i class="ph-fill ph-users"></i> Elenco Clienti</h3>
+          <p>Anagrafica completa dei clienti.</p>
+          <div style="margin-top: 16px; margin-bottom: 20px;">
+            <button class="btn-primary" onclick="App.openModal('client')"><i class="ph ph-plus"></i> Nuovo Cliente</button>
+          </div>
+          <div class="list-container">
+            ${clients.map(c => `
+              <div class="list-item" style="cursor: pointer;" onclick="App.goToClientDetail('${c.id}')">
+                <div style="flex: 1;">
+                  <div class="item-title">${c.name}</div>
+                  <div class="item-subtitle">${c.vat || 'P.IVA non inserita'}</div>
+                </div>
+                <i class="ph ph-caret-right" style="color: var(--text-secondary);"></i>
+              </div>
+            `).join('')}
+            ${clients.length === 0 ? '<p style="text-align: center; color: var(--text-secondary); padding: 20px;">Nessun cliente in elenco.</p>' : ''}
+          </div>
+        </div>
+      `;
+    },
+
+    trace_client_detail(id) {
+      const c = (Store.data.clients || []).find(x => x.id === id);
+      if(!c) return `<div class="card"><p>Cliente non trovato.</p></div>`;
+
+      return `
+        <div class="card">
+          <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
+          
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px;">
+            <div>
+              <h2 style="margin-bottom: 4px;">${c.name}</h2>
+              <p style="font-size: 14px; color: var(--text-secondary);">P.IVA: <strong>${c.vat || '-'}</strong></p>
+            </div>
+          </div>
+
+          <div class="dashboard-grid" style="grid-template-columns: 1fr; gap: 12px; margin-bottom: 24px;">
+            <div style="background: rgba(0,0,0,0.02); padding: 15px; border-radius: 12px;">
+              <h4 style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 10px;"><i class="ph ph-map-pin"></i> Indirizzi</h4>
+              <p style="font-size: 13px; margin-bottom: 8px;"><strong>Sede Legale:</strong><br>${c.legalAddress || '-'}</p>
+              <p style="font-size: 13px;"><strong>Sede Operativa:</strong><br>${c.officeAddress || '-'}</p>
+            </div>
+
+            <div style="background: rgba(0,0,0,0.02); padding: 15px; border-radius: 12px;">
+              <h4 style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 10px;"><i class="ph ph-user"></i> Contatti</h4>
+              <p style="font-size: 13px; margin-bottom: 8px;"><strong>Telefono:</strong> ${c.phone || '-'}</p>
+              <p style="font-size: 13px;"><strong>Email:</strong> ${c.email || '-'}</p>
+            </div>
+          </div>
+
+          <div style="display: flex; gap: 12px;">
+            <button class="btn-secondary" style="flex: 1; height: 50px;" onclick="App.openModal('edit-client', '${c.id}')">
+              <i class="ph-fill ph-pencil-simple"></i> Modifica
+            </button>
+            <button class="btn-danger" style="flex: 1; height: 50px;" onclick="App.removeItem('clients', '${c.id}', 'trace_clients')">
+              <i class="ph-fill ph-trash"></i> Elimina
+            </button>
+          </div>
+        </div>
+      `;
+    },
+
+    trace_sales() {
+      const sales = Store.data.sales || [];
+      const clients = Store.data.clients || [];
+      return `
+        <div class="card">
+          <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
+          <h3><i class="ph-fill ph-shopping-cart"></i> Registro Vendite</h3>
+          <p>Gestione vendite con auto-generazione dei Documenti di Trasporto (DDT).</p>
+          <div style="margin-top: 16px; margin-bottom: 20px;">
+            <button class="btn-primary" onclick="App.openModal('sale')"><i class="ph ph-plus"></i> Nuova Vendita</button>
+          </div>
+          <div class="list-container">
+            ${sales.map(s => {
+              const client = clients.find(c => c.id === s.clientId) || {};
+              return `
+                <div class="list-item" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 15px;">
+                  <div style="flex: 1; cursor: pointer;" onclick="App.goToSaleDetail('${s.id}')">
+                    <div class="item-title" style="font-weight: 700; color: var(--primary-color);">Vendita n. ${s.ddtNumber}</div>
+                    <div class="item-subtitle" style="margin-top: 2px;">Cliente: <strong>${client.name || 'Sconosciuto'}</strong></div>
+                    <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">Data: ${App.formatDate(s.date)} | Dest: ${s.deliveryAddress || '-'}</div>
+                  </div>
+                  <div style="display: flex; gap: 8px;">
+                    <button class="btn-secondary" style="width: auto; padding: 6px 12px; font-size: 12px;" onclick="App.exportDDT('${s.id}')"><i class="ph ph-printer"></i> Stampa DDT</button>
+                    <button class="btn-danger" style="width: 32px; height: 32px; padding: 0; display: flex; align-items: center; justify-content: center;" onclick="App.removeItem('sales', '${s.id}', 'trace_sales')"><i class="ph ph-trash"></i></button>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+            ${sales.length === 0 ? '<p style="text-align: center; color: var(--text-secondary); padding: 20px;">Nessuna vendita registrata.</p>' : ''}
+          </div>
+        </div>
+      `;
+    },
+
+    trace_sale_detail(id) {
+      const s = (Store.data.sales || []).find(x => x.id === id);
+      if(!s) return `<div class="card"><p>Vendita non trovata.</p></div>`;
+      const client = (Store.data.clients || []).find(c => c.id === s.clientId) || {};
+
+      return `
+        <div class="card">
+          <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
+          
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px;">
+            <div>
+              <h2 style="margin-bottom: 4px; color: var(--primary-color);">Vendita n. ${s.ddtNumber}</h2>
+              <p style="font-size: 14px; color: var(--text-secondary);">Data Documento: <strong>${App.formatDate(s.date)}</strong></p>
+            </div>
+            <button class="btn-primary" style="width: auto; padding: 8px 16px;" onclick="App.exportDDT('${s.id}')"><i class="ph ph-printer"></i> Stampa DDT</button>
+          </div>
+
+          <div class="dashboard-grid" style="grid-template-columns: 1fr; gap: 12px; margin-bottom: 24px;">
+            <div style="background: rgba(0,0,0,0.02); padding: 15px; border-radius: 12px;">
+              <h4 style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 10px;"><i class="ph ph-user"></i> Cliente</h4>
+              <p style="font-size: 13px; margin-bottom: 8px;"><strong>Ragione Sociale:</strong> ${client.name || '-'}</p>
+              <p style="font-size: 13px; margin-bottom: 8px;"><strong>Partita IVA:</strong> ${client.vat || '-'}</p>
+              <p style="font-size: 13px;"><strong>Luogo di Consegna:</strong> ${s.deliveryAddress || '-'}</p>
+            </div>
+          </div>
+
+          <div style="background: rgba(0,0,0,0.02); padding: 15px; border-radius: 12px; margin-bottom: 24px;">
+            <h4 style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); margin-bottom: 12px;"><i class="ph ph-cooking-pot"></i> Produzioni Vendute</h4>
+            <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 12px;">Clicca su una produzione per consultare la scheda dettagliata e gli ingredienti utilizzati.</p>
+            <div class="list-container">
+              ${(s.items || []).map(item => `
+                <div class="list-item" style="cursor: pointer; display: flex; justify-content: space-between; align-items: center; background: white; padding: 10px 15px; border: 1px solid var(--border-color); border-radius: 8px; margin-bottom: 8px;" onclick="App.goToProductionDetail('${item.productId}')">
+                  <div>
+                    <div style="font-size: 13px; font-weight: 700; color: var(--text-primary);">${item.productName}</div>
+                    <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">Lotto: <strong>${item.lot}</strong> | Scad: ${App.formatDate(item.expiry)}</div>
+                  </div>
+                  <div style="display: flex; align-items: center; gap: 10px;">
+                    <span style="font-size: 13px; font-weight: 700; background: var(--bg-body); padding: 4px 8px; border-radius: 6px;">${item.quantity} pz/kg</span>
+                    <i class="ph ph-caret-right" style="color: var(--text-secondary);"></i>
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    },
+
+    trace_ingredients() {
+      const ingredients = Store.data.ingredients || [];
+      return `
+        <div class="card">
+          <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
+          <h3><i class="ph-fill ph-list-bullets"></i> Ingredienti Generici</h3>
+          <p>Database centrale delle materie prime potenzialmente utilizzabili.</p>
           <div style="margin-top: 16px; margin-bottom: 20px;">
             <button class="btn-primary" onclick="App.openModal('ingredient')"><i class="ph ph-plus"></i> Nuovo Ingrediente</button>
           </div>
           <div class="list-container">
-            ${inventory.length > 0 ? inventory.map(item => `
-              <div class="list-item" style="cursor: pointer;" onclick="App.goToIngredientDetail('${item.ingredientId}')">
-                <div style="flex: 1;">
-                  <div class="item-title">${item.name}</div>
-                  <div class="item-subtitle">Giacenza: ${item.quantity} ${item.unit}</div>
-                  ${item.allergens && item.allergens.length > 0 ? `<div style="font-size: 11px; color: var(--danger-color); margin-top: 4px;">Allergeni: ${item.allergens.join(', ')}</div>` : ''}
+            ${ingredients.length > 0 ? ingredients.map(ing => {
+              const hasAllergen = ing.allergenPresent === true || ing.allergen === true || (ing.allergens && ing.allergens.length > 0);
+              const allergenListText = (ing.allergens && ing.allergens.length > 0) ? ing.allergens.join(', ') : '';
+              return `
+                <div class="list-item" style="cursor: pointer;" onclick="App.goToIngredientDetail('${ing.id}')">
+                  <div style="flex: 1;">
+                    <div class="item-title">${ing.name}</div>
+                    <div class="item-subtitle">Unità: <strong>${ing.unit}</strong></div>
+                  </div>
+                  <div style="display: flex; gap: 10px; align-items: center;">
+                    ${hasAllergen 
+                      ? `<div style="display: flex; flex-direction: column; align-items: flex-end; gap: 2px;">
+                           <span style="background: #fee2e2; color: #991b1b; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; border: 1px solid #fecaca;"><i class="ph-fill ph-warning"></i> Allergene</span>
+                           ${allergenListText ? `<span style="font-size: 10px; color: #991b1b; font-weight: 600; max-width: 150px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${allergenListText}">${allergenListText}</span>` : ''}
+                         </div>`
+                      : `<span style="background: #d1fae5; color: #065f46; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; border: 1px solid #a7f3d0;"><i class="ph-fill ph-check-circle"></i> Sicuro</span>`
+                    }
+                    <i class="ph ph-caret-right" style="color: var(--text-secondary); margin-left: 5px;"></i>
+                  </div>
                 </div>
-                <div style="display: flex; gap: 10px; align-items: center;">
-                  <div class="${item.isLow ? 'status-alert' : 'status-ok'}" style="white-space: nowrap;">${item.quantity} ${item.unit}</div>
-                  <i class="ph ph-caret-right" style="color: var(--text-secondary);"></i>
-                </div>
-              </div>
-            `).join('') : '<p style="text-align: center; color: var(--text-secondary);">Nessun ingrediente in stock.</p>'}
+              `;
+            }).join('') : '<p style="text-align: center; color: var(--text-secondary);">Nessun ingrediente in anagrafica.</p>'}
           </div>
         </div>
       `;
@@ -2028,74 +2852,36 @@ const App = {
       const ing = ingredients.find(x => x.id === id);
       if(!ing) return `<div class="card"><p>Ingrediente non trovato.</p></div>`;
       
-      const rawIncoming = (Store.data.incoming_goods || []).filter(g => g.ingredientId === id);
-      const incomingQty = rawIncoming.reduce((acc, curr) => acc + (parseFloat(curr.quantity) || 0), 0);
-      
-      const rawUsed = (Store.data.productions || []).filter(p => p.ingredients && p.ingredients.some(i => i.ingredientId === id));
-      const usedQty = rawUsed.reduce((acc, p) => {
-        const item = p.ingredients.find(i => i.ingredientId === id);
-        return acc + (parseFloat(item.quantity) || 0);
-      }, 0);
-      
-      const currentStock = incomingQty - usedQty;
-
-      // Movimenti uniti
-      const movements = [
-        ...rawIncoming.map(g => ({ type: 'IN', id: g.id, date: g.date, expiry: g.expiry, lotInterno: g.lotInterno, qty: g.quantity, label: `Carico Lotto Int: ${g.lotInterno || 'N/D'}` })),
-        ...rawUsed.map(p => ({ 
-          type: 'OUT', 
-          id: p.id,
-          date: p.date || p.createdAt, 
-          qty: p.ingredients.find(i => i.ingredientId === id).quantity, 
-          label: `Produzione: ${p.recipeName || 'Lotto ' + p.lot}` 
-        }))
-      ].sort((a,b) => new Date(b.date) - new Date(a.date));
+      const hasAllergen = ing.allergenPresent === true || ing.allergen === true || (ing.allergens && ing.allergens.length > 0);
 
       return `
         <div class="card">
           <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
           
-          <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px;">
-            <div style="flex: 1; padding-right: 15px;">
-              <h2 style="margin-bottom: 4px; font-size: 24px;">${ing.name}</h2>
-              <p style="font-size: 14px; color: var(--text-secondary);">Unità: ${ing.unit}</p>
-            </div>
-            <div class="status-badge ${currentStock < (ing.minStock || 5) ? 'status-alert' : 'status-ok'}" style="font-size: 16px; padding: 10px 15px; border-radius: 12px; font-weight: 800;">
-              ${currentStock.toFixed(2).replace('.', ',')} ${ing.unit}
-            </div>
-          </div>
-
-          <div style="background: rgba(0,0,0,0.02); padding: 15px; border-radius: 12px; margin-bottom: 24px;">
-            <h4 style="margin-bottom: 15px; font-size: 12px; text-transform: uppercase; color: var(--text-secondary);"><i class="ph-fill ph-clock-counter-clockwise"></i> Storico Movimenti (Entrate/Uscite)</h4>
-            <div class="movements-container" style="display: flex; flex-direction: column; gap: 12px;">
-              ${movements.map(m => `
-                <div style="display: flex; justify-content: space-between; align-items: center; padding-bottom: 10px; border-bottom: 1px dashed rgba(0,0,0,0.05); cursor: pointer;" onclick="App.${m.type === 'IN' ? 'goToIncomingDetail' : 'goToProductionDetail'}('${m.id}')">
-                  <div>
-                    <div style="font-size: 13px; font-weight: 600;">${m.label}</div>
-                    <div style="font-size: 11px; color: var(--text-secondary);">
-                      Data Carico/Prod: ${new Date(m.date).toLocaleDateString()}
-                      ${m.type === 'IN' && m.expiry ? ` | Scad: ${new Date(m.expiry).toLocaleDateString()}` : ''}
-                    </div>
-                  </div>
-                  <div style="font-weight: 700; color: ${m.type === 'IN' ? 'var(--success-color)' : 'var(--danger-color)'}">
-                    ${m.type === 'IN' ? '+' : '-'}${parseFloat(m.qty).toFixed(2)}
-                  </div>
+          <div style="background: var(--bg-body); padding: 20px; border-radius: 12px; border: 1px solid var(--border-color); margin-bottom: 24px;">
+            <div style="font-size: 11px; text-transform: uppercase; color: var(--primary-color); font-weight: 700; margin-bottom: 5px;">Scheda Ingrediente</div>
+            <h2 style="margin-bottom: 15px; font-size: 26px; font-weight: 800; letter-spacing: -0.5px;">${ing.name}</h2>
+            
+            <div style="display: grid; grid-template-columns: 1fr; gap: 12px; font-size: 14px;">
+              <div><strong>Unità di Misura:</strong> ${ing.unit}</div>
+              <div style="display: flex; align-items: flex-start; gap: 8px; flex-direction: column;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <strong>Allergene Presente:</strong> 
+                  ${hasAllergen 
+                    ? `<span style="background: #fee2e2; color: #991b1b; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; border: 1px solid #fecaca;"><i class="ph-fill ph-warning"></i> Sì</span>`
+                    : `<span style="background: #d1fae5; color: #065f46; padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: 700; border: 1px solid #a7f3d0;"><i class="ph-fill ph-check-circle"></i> No</span>`
+                  }
                 </div>
-              `).reverse().join('')}
-              ${movements.length === 0 ? '<p style="text-align: center; font-style: italic; font-size: 13px; color: var(--text-secondary);">Nessuna movimentazione registrata.</p>' : ''}
+                ${hasAllergen && ing.allergens && ing.allergens.length > 0 ? `
+                  <div style="font-size: 13px; margin-top: 4px; padding: 8px 12px; background: #fff5f5; border-radius: 8px; border: 1px solid #feb2b2; width: 100%;">
+                    <strong>Allergeni specificati:</strong> <span style="color: #c53030; font-weight: 700;">${ing.allergens.join(', ')}</span>
+                  </div>
+                ` : ''}
+              </div>
             </div>
           </div>
 
-          <div style="background: rgba(0,0,0,0.02); padding: 15px; border-radius: 12px; margin-bottom: 20px;">
-            <h4 style="margin-bottom: 12px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-secondary);">Allergeni</h4>
-            <div style="display: flex; flex-wrap: wrap; gap: 8px;">
-              ${ing.allergens && ing.allergens.length > 0 
-                ? ing.allergens.map(a => `<span style="background: white; border: 1.5px solid var(--danger-color); color: var(--danger-color); padding: 5px 12px; border-radius: 20px; font-size: 12px; font-weight: 700;">${a}</span>`).join('') 
-                : '<span style="color: var(--success-color); font-size: 14px; font-weight: 600;"><i class="ph ph-check-circle"></i> Nessun allergene</span>'}
-            </div>
-          </div>
-
-          <div style="display: flex; gap: 12px; margin-top: 30px;">
+          <div style="display: flex; gap: 12px; margin-top: 10px;">
             <button class="btn-secondary" style="flex: 1; height: 50px;" onclick="App.openModal('edit-ingredient', '${ing.id}')">
               <i class="ph-fill ph-pencil-simple"></i> Modifica
             </button>
@@ -2252,8 +3038,10 @@ const App = {
       const shipments = Store.data.trace_shipments || [];
       const goods = Store.data.incoming_goods || [];
       const productions = Store.data.productions || [];
+      const now = new Date();
 
-      // Calculate stock for each shipment
+      // Calculate stock for each shipment and track depletion
+      let dataChanged = false;
       const shipmentsWithStock = shipments.map(s => {
         const shipmentGoods = goods.filter(g => g.shipmentId === s.id);
         let hasStock = false;
@@ -2271,28 +3059,55 @@ const App = {
             break;
           }
         }
-        return { ...s, hasStock };
+
+        // Track depletion date: set depletedAt when first detected as depleted
+        const original = shipments.find(x => x.id === s.id);
+        if (!hasStock && !original.depletedAt) {
+          original.depletedAt = new Date().toISOString();
+          dataChanged = true;
+        } else if (hasStock && original.depletedAt) {
+          // Edge case: stock was restored (e.g. edit), clear depletion
+          delete original.depletedAt;
+          dataChanged = true;
+        }
+
+        const depletedAt = original.depletedAt ? new Date(original.depletedAt) : null;
+        const daysSinceDepleted = depletedAt ? Math.floor((now - depletedAt) / (1000 * 60 * 60 * 24)) : 0;
+
+        return { ...s, hasStock, depletedAt, daysSinceDepleted };
       });
+
+      // Persist depletedAt changes
+      if (dataChanged) {
+        Store.save();
+      }
 
       const activeShipments = shipmentsWithStock.filter(s => s.hasStock).sort((a,b) => new Date(b.date) - new Date(a.date));
       const oldShipments = shipmentsWithStock.filter(s => !s.hasStock).sort((a,b) => new Date(b.date) - new Date(a.date));
+      const removableShipments = oldShipments.filter(s => s.daysSinceDepleted >= 30);
 
-      const renderShipment = (s) => `
-        <div class="list-item" style="padding: 12px; display: flex; align-items: center; gap: 15px;">
+      const renderShipment = (s, isOld) => {
+        const showRemovableBadge = isOld && s.daysSinceDepleted >= 30;
+        return `
+        <div class="list-item" style="padding: 12px; display: flex; align-items: center; gap: 15px; ${showRemovableBadge ? 'opacity: 0.7; background: rgba(231,76,60,0.04);' : ''}">
           <div style="width: 45px; height: 45px; background: var(--bg-body); border-radius: 8px; display: flex; align-items: center; justify-content: center; overflow: hidden; border: 1px solid var(--border-color); cursor: pointer;" onclick="App.enlargeImage('${s.ddtPhoto}')">
             <img data-media-key="${s.ddtPhoto}" src="" style="width: 100%; height: 100%; object-fit: cover; background:var(--bg-secondary);" />
           </div>
           <div style="flex: 1;">
             <div class="item-title" style="font-weight: 700; font-family: monospace; font-size: 13px; color: var(--primary-color);">${s.fileName || 'Documento_Senza_Nome'}.jpg</div>
             <div class="item-subtitle">Fornitore: <strong>${s.supplierName}</strong></div>
-            <div class="item-subtitle">Caricato il: ${App.formatDate(s.date)}</div>
+            <div class="item-subtitle">Acquistato il: ${App.formatDate(s.date)}</div>
+            ${isOld && s.depletedAt ? `<div style="font-size: 10px; margin-top: 3px; color: ${s.daysSinceDepleted >= 30 ? 'var(--danger-color)' : 'var(--text-secondary)'};">
+              <i class="ph ph-clock"></i> Terminato da ${s.daysSinceDepleted} giorni${s.daysSinceDepleted >= 30 ? ' · <strong>Rimuovibile</strong>' : ''}
+            </div>` : ''}
           </div>
-          <div style="display: flex; gap: 8px;">
+          <div style="display: flex; gap: 8px; align-items: center;">
+             ${showRemovableBadge ? '<span style="background: var(--danger-color); color: white; padding: 2px 6px; border-radius: 6px; font-size: 8px; font-weight: 800;">+30gg</span>' : ''}
              <i class="ph ph-eye" style="color: var(--primary-color); cursor: pointer; font-size: 20px;" onclick="App.enlargeImage('${s.ddtPhoto}')"></i>
              <i class="ph ph-trash" style="color: var(--danger-color); cursor: pointer; font-size: 20px;" onclick="App.removeItem('trace_shipments', '${s.id}', 'trace_archive')"></i>
           </div>
         </div>
-      `;
+      `};
       
       return `
         <div class="card">
@@ -2304,14 +3119,27 @@ const App = {
             </button>
           </div>
 
-          <h4 style="margin-top: 10px; margin-bottom: 10px; color: var(--success-color); border-bottom: 2px solid var(--success-color); padding-bottom: 5px;"><i class="ph-fill ph-package"></i> Merce in Magazzino</h4>
+          <h4 style="margin-top: 10px; margin-bottom: 10px; color: var(--success-color); border-bottom: 2px solid var(--success-color); padding-bottom: 5px;"><i class="ph-fill ph-package"></i> Merce in Magazzino <span style="font-size: 11px; font-weight: 400; color: var(--text-secondary);">(${activeShipments.length})</span></h4>
           <div class="list-container" style="margin-bottom: 30px;">
-            ${activeShipments.length > 0 ? activeShipments.map(renderShipment).join('') : '<p style="text-align: center; color: var(--text-secondary); padding: 20px 0;">Nessun DDT per merce in giacenza.</p>'}
+            ${activeShipments.length > 0 ? activeShipments.map(s => renderShipment(s, false)).join('') : '<p style="text-align: center; color: var(--text-secondary); padding: 20px 0;">Nessun DDT per merce in giacenza.</p>'}
           </div>
 
-          <h4 style="margin-bottom: 10px; color: var(--text-secondary); border-bottom: 2px solid var(--border-color); padding-bottom: 5px;"><i class="ph-fill ph-clock-counter-clockwise"></i> DDT Vecchi (Merce Terminata)</h4>
+          <h4 style="margin-bottom: 10px; color: var(--text-secondary); border-bottom: 2px solid var(--border-color); padding-bottom: 5px;"><i class="ph-fill ph-clock-counter-clockwise"></i> DDT Vecchi (Merce Terminata) <span style="font-size: 11px; font-weight: 400;">(${oldShipments.length})</span></h4>
+          
+          ${removableShipments.length > 0 ? `
+            <div style="background: rgba(231,76,60,0.08); border: 1px solid rgba(231,76,60,0.2); border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+              <div>
+                <div style="font-size: 13px; font-weight: 700; color: var(--danger-color);"><i class="ph-fill ph-warning"></i> ${removableShipments.length} DDT terminat${removableShipments.length === 1 ? 'o' : 'i'} da oltre 30 giorni</div>
+                <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">Rimuovili per liberare spazio in memoria.</div>
+              </div>
+              <button class="btn-danger" style="width: auto; padding: 6px 14px; font-size: 12px; border-radius: 10px;" onclick="App.purgeOldShipments()">
+                <i class="ph ph-trash"></i> Rimuovi vecchi
+              </button>
+            </div>
+          ` : ''}
+
           <div class="list-container">
-            ${oldShipments.length > 0 ? oldShipments.map(renderShipment).join('') : '<p style="text-align: center; color: var(--text-secondary); padding: 20px 0;">Nessun DDT vecchio.</p>'}
+            ${oldShipments.length > 0 ? oldShipments.map(s => renderShipment(s, true)).join('') : '<p style="text-align: center; color: var(--text-secondary); padding: 20px 0;">Nessun DDT vecchio.</p>'}
           </div>
         </div>
       `;
@@ -2529,6 +3357,7 @@ const App = {
         { id: 'haccp_noncompliance', label: 'Non Conformit\u00e0' },
         { id: 'haccp_structure', label: 'Ambienti' },
         { id: 'haccp_maintenance', label: 'Manutenzione' },
+        { id: 'haccp_pest', label: 'Infestanti' },
         { id: 'trace_incoming', label: 'Carico Merci' },
         { id: 'trace_production', label: 'Produzione' },
         { id: 'trace_suppliers', label: 'Fornitori' }
@@ -2961,6 +3790,21 @@ const App = {
           notes
         });
 
+        if (isNC) {
+          const ncItems = checks.filter(c => c.status === 'NC').map(c => `${c.label} (Azione: ${c.correctiveAction || 'N/D'})`).join(', ');
+          Store.addItem('haccp_noncompliance', {
+            date,
+            operator,
+            responsibleWorker: operator,
+            originModule: 'Igiene Personale',
+            description: `Anomalie Igiene Personale per: ${finalWorkerNames || 'N/D'}. Elementi non conformi: ${ncItems}. Note: ${notes || ''}`,
+            correctiveAction: '',
+            dueDate: date,
+            isClosed: false,
+            closedDate: null
+          });
+        }
+
         this.closeModal();
         this.renderView(this.currentView);
       };
@@ -3193,12 +4037,17 @@ const App = {
             <div class="form-group" style="margin-bottom: 8px;">
               <input type="text" id="quick-ing-name" placeholder="Nome ingrediente..." style="font-size: 13px; padding: 8px;" />
             </div>
+            <div class="checkbox-group" style="margin-bottom: 8px;">
+              <input type="checkbox" id="quick-ing-allergen" style="cursor: pointer;" />
+              <label for="quick-ing-allergen" style="font-size: 11px; cursor: pointer; text-transform: none;">Allergene Presente</label>
+            </div>
             <div style="display: flex; gap: 8px;">
               <select id="quick-ing-unit" style="font-size: 13px; padding: 8px; flex: 1;">
                 <option value="kg">kg</option>
-                <option value="lt">lt</option>
+                <option value="g">g</option>
+                <option value="L">L</option>
+                <option value="ml">ml</option>
                 <option value="pz">pz</option>
-                <option value="gr">gr</option>
               </select>
               <button type="button" class="btn-primary" onclick="App.saveQuickIngredient()" style="width: auto; padding: 0 15px; height: 35px; font-size: 12px;">Salva</button>
               <button type="button" class="btn-secondary" onclick="document.getElementById('quick-ing-form').style.display = 'none'; document.querySelector('[onclick*=\'quick-ing-form\']').style.display='block'" style="width: auto; padding: 0 10px; height: 35px; font-size: 12px;">X</button>
@@ -3250,6 +4099,145 @@ const App = {
         });
         this.closeModal();
         this.renderView('trace_recipes');
+      };
+    }
+
+    if (type === 'client') {
+      title.innerHTML = '<i class="ph-fill ph-users"></i> Nuovo Cliente';
+      body.innerHTML = `
+        <div class="form-group"><label>Ragione Sociale / Nome *</label><input type="text" id="client-name" placeholder="Nome o Ragione Sociale" /></div>
+        <div class="form-group"><label>Partita IVA *</label><input type="text" id="client-vat" placeholder="01234567890" /></div>
+        <div class="form-group"><label>Sede Legale *</label><input type="text" id="client-legal" placeholder="Via..." /></div>
+        <div class="form-group"><label>Sede Operativa *</label><input type="text" id="client-office" placeholder="Via..." /></div>
+        <div class="form-group"><label>Numero di Telefono</label><input type="tel" id="client-phone" placeholder="012345678" /></div>
+        <div class="form-group"><label>Email</label><input type="email" id="client-email" placeholder="info@azienda.it" /></div>
+      `;
+      saveBtn.onclick = () => {
+        const name = document.getElementById('client-name').value.trim();
+        const vat = document.getElementById('client-vat').value.trim();
+        const legalAddress = document.getElementById('client-legal').value.trim();
+        const officeAddress = document.getElementById('client-office').value.trim();
+        const phone = document.getElementById('client-phone').value.trim();
+        const email = document.getElementById('client-email').value.trim();
+
+        if(!name || !vat || !legalAddress || !officeAddress) { alert("Inserisci tutti i campi obbligatori (*)."); return; }
+
+        Store.addItem('clients', { name, vat, legalAddress, officeAddress, phone, email });
+        this.closeModal();
+        this.renderView('trace_clients');
+      };
+    }
+
+    if (type === 'edit-client') {
+      const clientId = extraArg;
+      const c = Store.data.clients.find(x => x.id === clientId);
+      if(!c) return;
+      title.innerHTML = '<i class="ph-fill ph-pencil"></i> Modifica Cliente';
+      body.innerHTML = `
+        <div class="form-group"><label>Ragione Sociale / Nome *</label><input type="text" id="edit-client-name" value="${c.name || ''}" /></div>
+        <div class="form-group"><label>Partita IVA *</label><input type="text" id="edit-client-vat" value="${c.vat || ''}" /></div>
+        <div class="form-group"><label>Sede Legale *</label><input type="text" id="edit-client-legal" value="${c.legalAddress || ''}" /></div>
+        <div class="form-group"><label>Sede Operativa *</label><input type="text" id="edit-client-office" value="${c.officeAddress || ''}" /></div>
+        <div class="form-group"><label>Numero di Telefono</label><input type="tel" id="edit-client-phone" value="${c.phone || ''}" /></div>
+        <div class="form-group"><label>Email</label><input type="email" id="edit-client-email" value="${c.email || ''}" /></div>
+      `;
+      saveBtn.onclick = () => {
+        const name = document.getElementById('edit-client-name').value.trim();
+        const vat = document.getElementById('edit-client-vat').value.trim();
+        const legalAddress = document.getElementById('edit-client-legal').value.trim();
+        const officeAddress = document.getElementById('edit-client-office').value.trim();
+        const phone = document.getElementById('edit-client-phone').value.trim();
+        const email = document.getElementById('edit-client-email').value.trim();
+
+        if(!name || !vat || !legalAddress || !officeAddress) { alert("Inserisci tutti i campi obbligatori (*)."); return; }
+
+        Store.updateItem('clients', clientId, { name, vat, legalAddress, officeAddress, phone, email });
+        this.closeModal();
+        this.renderView('trace_client_detail');
+      };
+    }
+
+    if (type === 'sale') {
+      title.innerHTML = '<i class="ph-fill ph-shopping-cart"></i> Nuova Vendita (Genera DDT)';
+      this.saleItemCounter = 0;
+      body.innerHTML = `
+        <div class="form-group">
+          <label>Cliente *</label>
+          <select id="sale-client-id" onchange="App.onSaleClientChange(this.value)">
+            <option value="">-- Seleziona Cliente --</option>
+            ${(Store.data.clients || []).map(c => `<option value="${c.id}">${c.name}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Data di Vendita *</label>
+          <input type="date" id="sale-date" value="${new Date().toISOString().split('T')[0]}" />
+        </div>
+        <div class="form-group">
+          <label>Luogo di consegna *</label>
+          <input type="text" id="sale-delivery-address" placeholder="Via..." />
+        </div>
+
+        <h4 style="margin-top: 20px; margin-bottom: 10px; font-size: 13px; color: var(--text-secondary);">Righe Prodotti</h4>
+        <div id="sale-items-container" style="margin-bottom: 10px;"></div>
+        <button type="button" class="btn-secondary" style="width: auto; font-size: 12px; padding: 6px 12px; margin-bottom: 15px;" onclick="App.addSaleItemRow()"><i class="ph ph-plus"></i> Aggiungi Riga Prodotto</button>
+      `;
+
+      // Pre-add one empty row for convenience
+      setTimeout(() => this.addSaleItemRow(), 50);
+
+      saveBtn.onclick = () => {
+        const clientId = document.getElementById('sale-client-id').value;
+        const date = document.getElementById('sale-date').value;
+        const deliveryAddress = document.getElementById('sale-delivery-address').value.trim();
+
+        if(!clientId || !date || !deliveryAddress) { alert("Inserisci tutti i campi obbligatori (*)."); return; }
+
+        const rows = document.querySelectorAll('.sale-item-row');
+        const items = [];
+        let valid = true;
+
+        rows.forEach(row => {
+          const select = row.querySelector('.sale-prod-select');
+          const qtyInput = row.querySelector('.sale-qty-input');
+          if (select && qtyInput) {
+            const prodId = select.value;
+            const quantity = parseFloat(qtyInput.value);
+            if (!prodId || isNaN(quantity) || quantity <= 0) {
+              valid = false;
+            } else {
+              const prod = (Store.data.productions || []).find(p => p.id === prodId);
+              if (prod) {
+                items.push({
+                  productId: prodId,
+                  productName: prod.recipeName,
+                  lot: prod.lot,
+                  expiry: prod.expiry,
+                  quantity: quantity
+                });
+              }
+            }
+          }
+        });
+
+        if(!valid || items.length === 0) {
+          alert("Compila tutte le righe prodotto inserite con una quantità positiva.");
+          return;
+        }
+
+        const sales = Store.data.sales || [];
+        const ddtNumber = sales.reduce((max, s) => Math.max(max, s.ddtNumber || 0), 0) + 1;
+
+        const newSale = Store.addItem('sales', {
+          clientId,
+          date,
+          deliveryAddress,
+          items,
+          ddtNumber
+        });
+
+        this.closeModal();
+        this.renderView('trace_sales');
+        this.exportDDT(newSale.id);
       };
     }
 
@@ -3395,12 +4383,17 @@ const App = {
             <div class="form-group" style="margin-bottom: 8px;">
               <input type="text" id="quick-ing-name-edit" placeholder="Nome ingrediente..." style="font-size: 13px; padding: 8px;" />
             </div>
+            <div class="checkbox-group" style="margin-bottom: 8px;">
+              <input type="checkbox" id="quick-ing-allergen-edit" style="cursor: pointer;" />
+              <label for="quick-ing-allergen-edit" style="font-size: 11px; cursor: pointer; text-transform: none;">Allergene Presente</label>
+            </div>
             <div style="display: flex; gap: 8px;">
               <select id="quick-ing-unit-edit" style="font-size: 13px; padding: 8px; flex: 1;">
                 <option value="kg">kg</option>
-                <option value="lt">lt</option>
+                <option value="g">g</option>
+                <option value="L">L</option>
+                <option value="ml">ml</option>
                 <option value="pz">pz</option>
-                <option value="gr">gr</option>
               </select>
               <button type="button" class="btn-primary" onclick="App.saveQuickIngredient(true)" style="width: auto; padding: 0 15px; height: 35px; font-size: 12px;">Salva</button>
               <button type="button" class="btn-secondary" onclick="document.getElementById('quick-ing-form-edit').style.display = 'none'; document.querySelector('[onclick*=\'quick-ing-form-edit\']').style.display='block'" style="width: auto; padding: 0 10px; height: 35px; font-size: 12px;">X</button>
@@ -3467,22 +4460,24 @@ const App = {
           <label>Unità di Misura</label>
           <select id="ing-unit">
             <option value="kg">kg</option>
-            <option value="lt">lt</option>
+            <option value="g">g</option>
+            <option value="L">L</option>
+            <option value="ml">ml</option>
             <option value="pz">pz</option>
-            <option value="gr">gr</option>
           </select>
         </div>
-        <div class="form-group">
-          <label>Scorta Minima</label>
-          <input type="number" id="ing-min" value="5" step="0.1" />
+        <div class="checkbox-group" style="margin-top: 20px; margin-bottom: 10px;">
+          <input type="checkbox" id="ing-allergen-present" onchange="document.getElementById('allergen-list-section').style.display = this.checked ? 'block' : 'none'" style="width: 18px; height: 18px; cursor: pointer;" />
+          <label for="ing-allergen-present" style="font-size: 13px; text-transform: none; cursor: pointer; margin-left: 8px; font-weight: 500;">
+            Allergene Presente (Sì/No)
+          </label>
         </div>
-        
-        <h4 style="margin-bottom: 10px;">Allergeni Presenti</h4>
-        <div style="background: rgba(0,0,0,0.02); padding: 10px; border-radius: 8px;">
+        <div id="allergen-list-section" style="display: none; background: rgba(0,0,0,0.02); padding: 12px; border-radius: 8px; max-height: 180px; overflow-y: auto; margin-top: 10px; border: 1px solid var(--border-color);">
+          <label style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); display: block; margin-bottom: 8px;">Seleziona gli allergeni:</label>
           ${allergenList.map(a => `
-            <div class="checkbox-group" style="margin-bottom: 5px;">
-              <input type="checkbox" class="allergen-check" value="${a}" id="all-${a}" />
-              <label for="all-${a}" style="font-size: 12px; text-transform: none;">${a}</label>
+            <div class="checkbox-group" style="margin-bottom: 6px; display: flex; align-items: center;">
+              <input type="checkbox" class="allergen-check" value="${a}" id="all-${a}" style="cursor: pointer;" />
+              <label for="all-${a}" style="font-size: 12px; text-transform: none; cursor: pointer; margin-left: 5px;">${a}</label>
             </div>
           `).join('')}
         </div>
@@ -3491,13 +4486,24 @@ const App = {
       saveBtn.onclick = () => {
         const name = document.getElementById('ing-name').value.trim();
         const unit = document.getElementById('ing-unit').value;
-        const min = parseFloat(document.getElementById('ing-min').value) || 0;
-        const allergens = Array.from(document.querySelectorAll('.allergen-check:checked')).map(cb => cb.value);
+        const allergenPresent = document.getElementById('ing-allergen-present').checked;
+        const allergens = allergenPresent ? Array.from(document.querySelectorAll('.allergen-check:checked')).map(cb => cb.value) : [];
 
         if(!name) { alert("Inserisci il nome."); return; }
+        if(allergenPresent && allergens.length === 0) {
+          alert("Seleziona almeno un allergene dall'elenco o deseleziona 'Allergene Presente'.");
+          return;
+        }
+
+        // Controllo chiave univoca
+        const exists = (Store.data.ingredients || []).some(i => i.name.toLowerCase().trim() === name.toLowerCase());
+        if(exists) {
+          alert("Un ingrediente con questo nome è già presente in anagrafica.");
+          return;
+        }
 
         Store.addItem('ingredients', {
-          name, unit, minStock: min, allergens, stock: 0
+          name, unit, allergenPresent, allergens
         });
 
         this.closeModal();
@@ -3509,6 +4515,9 @@ const App = {
       const ingId = extraArg;
       const ing = Store.data.ingredients.find(x => x.id === ingId);
       if(!ing) return;
+
+      const hasAllergen = ing.allergenPresent === true || ing.allergen === true || (ing.allergens && ing.allergens.length > 0);
+      const activeAllergens = ing.allergens || [];
 
       title.innerHTML = '<i class="ph-fill ph-pencil"></i> Modifica Ingrediente';
       const allergenList = [
@@ -3525,22 +4534,24 @@ const App = {
           <label>Unità di Misura</label>
           <select id="edit-ing-unit">
             <option value="kg" ${ing.unit === 'kg' ? 'selected' : ''}>kg</option>
-            <option value="lt" ${ing.unit === 'lt' ? 'selected' : ''}>lt</option>
+            <option value="g" ${ing.unit === 'g' ? 'selected' : ''}>g</option>
+            <option value="L" ${ing.unit === 'L' ? 'selected' : ''}>L</option>
+            <option value="ml" ${ing.unit === 'ml' ? 'selected' : ''}>ml</option>
             <option value="pz" ${ing.unit === 'pz' ? 'selected' : ''}>pz</option>
-            <option value="gr" ${ing.unit === 'gr' ? 'selected' : ''}>gr</option>
           </select>
         </div>
-        <div class="form-group">
-          <label>Scorta Minima</label>
-          <input type="number" id="edit-ing-min" value="${ing.minStock || 5}" step="0.1" />
+        <div class="checkbox-group" style="margin-top: 20px; margin-bottom: 10px;">
+          <input type="checkbox" id="edit-ing-allergen-present" onchange="document.getElementById('edit-allergen-list-section').style.display = this.checked ? 'block' : 'none'" style="width: 18px; height: 18px; cursor: pointer;" ${hasAllergen ? 'checked' : ''} />
+          <label for="edit-ing-allergen-present" style="font-size: 13px; text-transform: none; cursor: pointer; margin-left: 8px; font-weight: 500;">
+            Allergene Presente (Sì/No)
+          </label>
         </div>
-        
-        <h4 style="margin-bottom: 10px;">Allergeni Presenti</h4>
-        <div style="background: rgba(0,0,0,0.02); padding: 10px; border-radius: 8px;">
+        <div id="edit-allergen-list-section" style="display: ${hasAllergen ? 'block' : 'none'}; background: rgba(0,0,0,0.02); padding: 12px; border-radius: 8px; max-height: 180px; overflow-y: auto; margin-top: 10px; border: 1px solid var(--border-color);">
+          <label style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-secondary); display: block; margin-bottom: 8px;">Seleziona gli allergeni:</label>
           ${allergenList.map(a => `
-            <div class="checkbox-group" style="margin-bottom: 5px;">
-              <input type="checkbox" class="edit-allergen-check" value="${a}" id="edit-all-${a}" ${(ing.allergens || []).includes(a) ? 'checked' : ''} />
-              <label for="edit-all-${a}" style="font-size: 12px; text-transform: none;">${a}</label>
+            <div class="checkbox-group" style="margin-bottom: 6px; display: flex; align-items: center;">
+              <input type="checkbox" class="edit-allergen-check" value="${a}" id="edit-all-${a}" style="cursor: pointer;" ${activeAllergens.includes(a) ? 'checked' : ''} />
+              <label for="edit-all-${a}" style="font-size: 12px; text-transform: none; cursor: pointer; margin-left: 5px;">${a}</label>
             </div>
           `).join('')}
         </div>
@@ -3549,13 +4560,24 @@ const App = {
       saveBtn.onclick = () => {
         const name = document.getElementById('edit-ing-name').value.trim();
         const unit = document.getElementById('edit-ing-unit').value;
-        const min = parseFloat(document.getElementById('edit-ing-min').value) || 0;
-        const allergens = Array.from(document.querySelectorAll('.edit-allergen-check:checked')).map(cb => cb.value);
+        const allergenPresent = document.getElementById('edit-ing-allergen-present').checked;
+        const allergens = allergenPresent ? Array.from(document.querySelectorAll('.edit-allergen-check:checked')).map(cb => cb.value) : [];
 
         if(!name) { alert("Inserisci il nome."); return; }
+        if(allergenPresent && allergens.length === 0) {
+          alert("Seleziona almeno un allergene dall'elenco o deseleziona 'Allergene Presente'.");
+          return;
+        }
+
+        // Controllo chiave univoca (escludendo se stesso)
+        const exists = (Store.data.ingredients || []).some(i => i.id !== ingId && i.name.toLowerCase().trim() === name.toLowerCase());
+        if(exists) {
+          alert("Un ingrediente con questo nome è già presente in anagrafica.");
+          return;
+        }
 
         Store.updateItem('ingredients', ingId, {
-          name, unit, minStock: min, allergens
+          name, unit, allergenPresent, allergens
         });
 
         this.closeModal();
@@ -3876,10 +4898,14 @@ const App = {
           if (!isConform) {
             Store.addItem('haccp_noncompliance', {
               date: date,
-              description: `Temperatura fuori range in ${eq.name} (${temp}°C). Ubicazione: ${eq.locationName}. Range: ${eq.minTemp}/${eq.maxTemp}.`,
-              correctiveAction: corrective,
               operator: operator,
-              closedAt: date
+              responsibleWorker: operator,
+              originModule: 'Temperature',
+              description: `Temperatura fuori range in ${eq.name} (${temp}°C). Ubicazione: ${eq.locationName}. Range: ${eq.minTemp}/${eq.maxTemp}. Azione immediata consigliata: ${corrective}`,
+              correctiveAction: '',
+              dueDate: date,
+              isClosed: false,
+              closedDate: null
             });
           }
         } else {
@@ -3976,10 +5002,14 @@ const App = {
               if (!isConform) {
                 Store.addItem('haccp_noncompliance', {
                   date: date,
-                  description: `Temperatura fuori range in ${eq.name} (${temp}°C) durante registrazione rapida.`,
-                  correctiveAction: 'Verifica immediata attrezzatura',
                   operator: operator,
-                  closedAt: date
+                  responsibleWorker: operator,
+                  originModule: 'Temperature',
+                  description: `Temperatura fuori range in ${eq.name} (${temp}°C) durante registrazione rapida.`,
+                  correctiveAction: '',
+                  dueDate: date,
+                  isClosed: false,
+                  closedDate: null
                 });
               }
               savedCount++;
@@ -4724,6 +5754,181 @@ const App = {
         this.renderView('haccp_nc');
       };
     }
+    if (type === 'pest') {
+      title.innerHTML = '<i class="ph-fill ph-bug"></i> Nuovo Controllo Infestanti';
+      const eligible = App.getEligibleOperators('ambienti');
+      const today = new Date().toISOString().split('T')[0];
+      const defaultTraps = Store.data.settings.pest_default_traps || 10;
+      
+      App.tempPestMapPhoto = null;
+      
+      body.innerHTML = `
+        <div class="form-group">
+          <label><i class="ph ph-calendar"></i> Data Controllo</label>
+          <input type="date" id="pest-date" value="${today}" />
+        </div>
+        <div class="form-group">
+          <label><i class="ph ph-user"></i> Operatore</label>
+          <select id="pest-operator">
+            <option value="">-- Seleziona Operatore --</option>
+            ${eligible.map(w => `<option value="${w.firstName} ${w.lastName}">${w.firstName} ${w.lastName}</option>`).join('')}
+          </select>
+        </div>
+        
+        <div class="form-group">
+          <label><i class="ph ph-map-trifold"></i> Planimetria Posizionamento Trappole</label>
+          <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+            <button type="button" class="btn-secondary" onclick="document.getElementById('pest-map-file').click()" style="padding: 10px; font-size: 13px;"><i class="ph ph-file-arrow-up"></i> Da File</button>
+            <button type="button" class="btn-secondary" onclick="document.getElementById('pest-map-camera').click()" style="padding: 10px; font-size: 13px;"><i class="ph ph-camera"></i> Da Foto</button>
+          </div>
+          <input type="file" id="pest-map-file" accept="image/*,application/pdf" style="display: none;" onchange="App.handlePestMapPhoto(this)" />
+          <input type="file" id="pest-map-camera" accept="image/*" capture="environment" style="display: none;" onchange="App.handlePestMapPhoto(this)" />
+          
+          <div id="pest-map-reference-container" style="margin-top: 10px; display: none; background: rgba(0,0,0,0.02); padding: 10px; border-radius: 8px; border: 1px dashed var(--border-color); text-align: center;">
+            <span style="font-size: 11px; color: var(--text-secondary); display: block; margin-bottom: 6px;">Planimetria di riferimento (Ultimo controllo):</span>
+            <img id="pest-map-reference-img" src="" style="max-height: 120px; max-width: 100%; object-fit: contain; border-radius: 4px;" />
+          </div>
+
+          <div id="pest-map-preview-container" style="margin-top: 10px; display: none; text-align: center; background: rgba(136,176,75,0.05); padding: 10px; border-radius: 8px; border: 1px solid var(--success-color);">
+            <span style="font-size: 11px; color: var(--success-color); display: block; margin-bottom: 6px; font-weight: bold;">Nuova planimetria caricata:</span>
+            <img id="preview-pest-map" src="" style="max-height: 120px; max-width: 100%; object-fit: contain; border-radius: 4px;" />
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label><i class="ph ph-number-square-ten"></i> Numero Trappole Installate</label>
+          <input type="number" id="pest-traps-count" value="${defaultTraps}" min="0" />
+        </div>
+
+        <div class="form-group">
+          <label><i class="ph ph-mask-happy"></i> Segni di presenza di roditori</label>
+          <select id="pest-rodent-signs" onchange="App.evaluatePestAnomalies()">
+            <option value="Assenti">Assenti</option>
+            <option value="Ricerca di escrementi">Ricerca di escrementi</option>
+            <option value="Tracce di camminamento">Tracce di camminamento</option>
+            <option value="Rosicchiature su strutture o imballaggi">Rosicchiature su strutture o imballaggi</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label><i class="ph ph-eye"></i> Avvistamenti diretti</label>
+          <select id="pest-direct-sightings" onchange="App.evaluatePestAnomalies()">
+            <option value="Nessun avvistamento">Nessun avvistamento</option>
+            <option value="Esemplari vivi (roditori)">Esemplari vivi (roditori)</option>
+            <option value="Esemplari morti (roditori)">Esemplari morti (roditori)</option>
+            <option value="Animali striscianti vivi/morti">Animali striscianti vivi/morti</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label><i class="ph ph-gear"></i> Controllo trappole</label>
+          <select id="pest-trap-status" onchange="App.evaluatePestAnomalies()">
+            <option value="Tutte le trappole integre e attive">Tutte le trappole integre e attive</option>
+            <option value="Dispositivo danneggiato/da sostituire (specificare numero trappola)">Dispositivo danneggiato/da sostituire (specificare numero trappola)</option>
+            <option value="Esca consumata/scattata (specificare numero trappola)">Esca consumata/scattata (specificare numero trappola)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label><i class="ph ph-bug"></i> Animali striscianti</label>
+          <select id="pest-crawling-insects" onchange="App.evaluatePestAnomalies()">
+            <option value="Assenti">Assenti</option>
+            <option value="Presenza blatte">Presenza blatte</option>
+            <option value="Presenza formiche">Presenza formiche</option>
+            <option value="Presenza altri artropodi">Presenza altri artropodi</option>
+          </select>
+        </div>
+
+        <div id="pest-nc-notes-container" style="display: none; margin-top: 20px; border-left: 4px solid var(--danger-color); background: rgba(229,62,62,0.03); padding: 12px; border-radius: 0 8px 8px 0;">
+          <div class="form-group" style="margin-bottom: 0;">
+            <label style="color: var(--danger-color); font-weight: bold;"><i class="ph ph-warning-circle"></i> Note Non Conformità *</label>
+            <textarea id="pest-nc-notes" rows="3" placeholder="Fornire i dettagli dell'anomalia riscontrata (es. numero trappola danneggiata)..." style="border: 1px solid var(--danger-color);"></textarea>
+          </div>
+        </div>
+      `;
+
+      // Resolve last map as reference if any
+      const previousRecords = Store.data.haccp_pest || [];
+      const recordWithMap = [...previousRecords].reverse().find(r => r.mapPhoto);
+      if (recordWithMap && typeof MediaStore !== 'undefined') {
+        MediaStore.get(recordWithMap.mapPhoto).then(data => {
+          if (data) {
+            const refImg = document.getElementById('pest-map-reference-img');
+            const refCont = document.getElementById('pest-map-reference-container');
+            if (refImg && refCont) {
+              refImg.src = data;
+              refCont.style.display = 'block';
+            }
+          }
+        }).catch(err => console.error(err));
+      }
+
+      saveBtn.innerHTML = '<i class="ph ph-floppy-disk"></i> Salva Registro';
+      saveBtn.onclick = () => {
+        const date = document.getElementById('pest-date').value;
+        const operator = document.getElementById('pest-operator').value;
+        const trapsCount = parseInt(document.getElementById('pest-traps-count').value);
+        const rodentSigns = document.getElementById('pest-rodent-signs').value;
+        const directSightings = document.getElementById('pest-direct-sightings').value;
+        const trapStatus = document.getElementById('pest-trap-status').value;
+        const crawlingInsects = document.getElementById('pest-crawling-insects').value;
+        const notes = document.getElementById('pest-nc-notes').value.trim();
+
+        if (!operator) { alert("Seleziona l'operatore."); return; }
+        if (isNaN(trapsCount) || trapsCount < 0) { alert("Inserisci un numero valido di trappole."); return; }
+
+        const isAnomaly = rodentSigns !== 'Assenti' ||
+                          directSightings !== 'Nessun avvistamento' ||
+                          trapStatus !== 'Tutte le trappole integre e attive' ||
+                          crawlingInsects !== 'Assenti';
+
+        if (isAnomaly && !notes) {
+          alert("Nelle situazioni di anomalia riscontrata, il campo Note Non Conformità è obbligatorio.");
+          return;
+        }
+
+        // Determine mapPhoto to save: use new upload or fallback to last control's mapPhoto
+        let mapPhoto = App.tempPestMapPhoto;
+        if (!mapPhoto && recordWithMap) {
+          mapPhoto = recordWithMap.mapPhoto;
+        }
+
+        const overallStatus = isAnomaly ? 'NON CONFORME' : 'CONFORME';
+
+        // Add to haccp_pest
+        Store.addItem('haccp_pest', {
+          date,
+          operator,
+          trapsCount,
+          rodentSigns,
+          directSightings,
+          trapStatus,
+          crawlingInsects,
+          notes: isAnomaly ? notes : '',
+          mapPhoto,
+          status: overallStatus
+        });
+
+        // Add to general noncompliance table if anomaly
+        if (isAnomaly) {
+          Store.addItem('haccp_noncompliance', {
+            date,
+            operator,
+            responsibleWorker: operator,
+            originModule: 'Controllo Infestanti',
+            description: `Anomalia Controllo Infestanti: Roditori: ${rodentSigns}, Avvistamenti: ${directSightings}, Stato Trappole: ${trapStatus}, Insetti striscianti: ${crawlingInsects}. Note: ${notes}`,
+            correctiveAction: '',
+            dueDate: date,
+            isClosed: false,
+            closedDate: null
+          });
+        }
+
+        this.closeModal();
+        this.renderView('haccp_pest');
+      };
+    }
+
     if (type === 'structure') {
       title.innerHTML = '<i class="ph-fill ph-house-line"></i> Nuovo Controllo Ambienti';
       const eligible = App.getEligibleOperators('ambienti');
@@ -4783,13 +5988,28 @@ const App = {
            const overallStatus = checks.some(c => c.status === 'NC') ? 'NON CONFORME' : 'CONFORME';
 
            Store.addItem('haccp_structure', {
-             date, 
-             operator, 
-             environment: envName, 
-             checks, 
-             status: overallStatus,
-             frequency: Store.data.settings.structureFrequency
-           });
+              date, 
+              operator, 
+              environment: envName, 
+              checks, 
+              status: overallStatus,
+              frequency: Store.data.settings.structureFrequency
+            });
+
+            if (overallStatus === 'NON CONFORME') {
+              const ncItems = checks.filter(c => c.status === 'NC').map(c => `${c.label} (Azione: ${c.correctiveAction || 'N/D'})`).join(', ');
+              Store.addItem('haccp_noncompliance', {
+                date,
+                operator,
+                responsibleWorker: operator,
+                originModule: 'Ambienti e Strutture',
+                description: `Anomalie riscontrate nel Controllo Ambiente: ${envName}. Elementi non conformi: ${ncItems}.`,
+                correctiveAction: '',
+                dueDate: date,
+                isClosed: false,
+                closedDate: null
+              });
+            }
         });
 
         this.closeModal();
@@ -4934,6 +6154,180 @@ const App = {
       };
     }
 
+    if (type === 'training-course') {
+      const workerId = extraArg;
+      title.innerHTML = '<i class="ph-fill ph-graduation-cap"></i> Aggiungi Corso Formazione';
+      App.tempTrainingCertPhoto = null;
+
+      body.innerHTML = `
+        <div class="form-group">
+          <label>Tipologia Corso *</label>
+          <select id="course-type">
+            <option value="Formazione Rischio 1 (4 h)">Formazione Rischio 1 (4 h)</option>
+            <option value="Formazione Rischio 2 (8 h)">Formazione Rischio 2 (8 h)</option>
+            <option value="Responsabile (12 h)">Responsabile (12 h)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Data Conseguimento *</label>
+          <input type="date" id="course-conceived-date" value="${new Date().toISOString().split('T')[0]}" />
+        </div>
+        <div class="form-group">
+          <label>Data Scadenza *</label>
+          <input type="date" id="course-expiry-date" />
+        </div>
+        <div class="form-group">
+          <label>Configurazione Preavviso Scadenza</label>
+          <select id="course-preavviso">
+            <option value="15">15 giorni prima</option>
+            <option value="30" selected>30 giorni prima</option>
+            <option value="60">60 giorni prima</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Caricamento Attestato</label>
+          <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+            <button type="button" class="btn-secondary" onclick="document.getElementById('training-cert-file').click()" style="padding: 10px; font-size: 13px;"><i class="ph ph-file-arrow-up"></i> Da File</button>
+            <button type="button" class="btn-secondary" onclick="document.getElementById('training-cert-camera').click()" style="padding: 10px; font-size: 13px;"><i class="ph ph-camera"></i> Da Foto</button>
+          </div>
+          <input type="file" id="training-cert-file" accept="image/*,application/pdf" style="display: none;" onchange="App.handleTrainingCertPhoto(this)" />
+          <input type="file" id="training-cert-camera" accept="image/*" capture="environment" style="display: none;" onchange="App.handleTrainingCertPhoto(this)" />
+          
+          <div id="training-cert-preview-container" style="margin-top: 10px; display: none; text-align: center; background: rgba(136,176,75,0.05); padding: 10px; border-radius: 8px; border: 1px solid var(--success-color);">
+            <span style="font-size: 11px; color: var(--success-color); display: block; margin-bottom: 6px; font-weight: bold;">Anteprima attestato caricato:</span>
+            <img id="preview-training-cert" src="" style="max-height: 120px; max-width: 100%; object-fit: contain; border-radius: 4px;" />
+          </div>
+        </div>
+      `;
+
+      saveBtn.innerHTML = '<i class="ph ph-floppy-disk"></i> Aggiungi Corso';
+      saveBtn.onclick = () => {
+        const courseType = document.getElementById('course-type').value;
+        const conceivedDate = document.getElementById('course-conceived-date').value;
+        const expiryDate = document.getElementById('course-expiry-date').value;
+        const preavviso = parseInt(document.getElementById('course-preavviso').value);
+
+        if (!conceivedDate || !expiryDate) {
+          alert("Inserisci sia la data di conseguimento che la data di scadenza.");
+          return;
+        }
+
+        // Calculate triggerDate
+        const expiryObj = new Date(expiryDate);
+        expiryObj.setDate(expiryObj.getDate() - preavviso);
+        const triggerDate = expiryObj.toISOString().split('T')[0];
+
+        Store.addItem('worker_training', {
+          workerId,
+          type: 'course',
+          courseType,
+          conceivedDate,
+          expiryDate,
+          preavviso,
+          triggerDate,
+          certPhoto: App.tempTrainingCertPhoto || null,
+          createdAt: new Date().toISOString()
+        });
+
+        this.closeModal();
+        this.currentRecordId = workerId;
+        this.renderView('haccp_training_detail');
+      };
+    }
+
+    if (type === 'edit-training-course') {
+      const courseId = extraArg;
+      const c = Store.data.worker_training.find(x => x.id === courseId);
+      if (!c) return;
+      
+      title.innerHTML = '<i class="ph-fill ph-pencil"></i> Modifica Corso Formazione';
+      App.tempTrainingCertPhoto = c.certPhoto;
+
+      body.innerHTML = `
+        <div class="form-group">
+          <label>Tipologia Corso *</label>
+          <select id="course-type">
+            <option value="Formazione Rischio 1 (4 h)" ${c.courseType === 'Formazione Rischio 1 (4 h)' ? 'selected' : ''}>Formazione Rischio 1 (4 h)</option>
+            <option value="Formazione Rischio 2 (8 h)" ${c.courseType === 'Formazione Rischio 2 (8 h)' ? 'selected' : ''}>Formazione Rischio 2 (8 h)</option>
+            <option value="Responsabile (12 h)" ${c.courseType === 'Responsabile (12 h)' ? 'selected' : ''}>Responsabile (12 h)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Data Conseguimento *</label>
+          <input type="date" id="course-conceived-date" value="${c.conceivedDate}" />
+        </div>
+        <div class="form-group">
+          <label>Data Scadenza *</label>
+          <input type="date" id="course-expiry-date" value="${c.expiryDate}" />
+        </div>
+        <div class="form-group">
+          <label>Configurazione Preavviso Scadenza</label>
+          <select id="course-preavviso">
+            <option value="15" ${c.preavviso === 15 ? 'selected' : ''}>15 giorni prima</option>
+            <option value="30" ${c.preavviso === 30 ? 'selected' : ''}>30 giorni prima</option>
+            <option value="60" ${c.preavviso === 60 ? 'selected' : ''}>60 giorni prima</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Caricamento Attestato</label>
+          <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+            <button type="button" class="btn-secondary" onclick="document.getElementById('training-cert-file').click()" style="padding: 10px; font-size: 13px;"><i class="ph ph-file-arrow-up"></i> Da File</button>
+            <button type="button" class="btn-secondary" onclick="document.getElementById('training-cert-camera').click()" style="padding: 10px; font-size: 13px;"><i class="ph ph-camera"></i> Da Foto</button>
+          </div>
+          <input type="file" id="training-cert-file" accept="image/*,application/pdf" style="display: none;" onchange="App.handleTrainingCertPhoto(this)" />
+          <input type="file" id="training-cert-camera" accept="image/*" capture="environment" style="display: none;" onchange="App.handleTrainingCertPhoto(this)" />
+          
+          <div id="training-cert-preview-container" style="margin-top: 10px; display: ${c.certPhoto ? 'block' : 'none'}; text-align: center; background: rgba(136,176,75,0.05); padding: 10px; border-radius: 8px; border: 1px solid var(--success-color);">
+            <span style="font-size: 11px; color: var(--success-color); display: block; margin-bottom: 6px; font-weight: bold;">Attestato caricato:</span>
+            <img id="preview-training-cert" data-media-key="${c.certPhoto || ''}" src="" style="max-height: 120px; max-width: 100%; object-fit: contain; border-radius: 4px;" />
+          </div>
+        </div>
+      `;
+
+      saveBtn.innerHTML = '<i class="ph ph-floppy-disk"></i> Salva Modifiche';
+      saveBtn.onclick = () => {
+        const courseType = document.getElementById('course-type').value;
+        const conceivedDate = document.getElementById('course-conceived-date').value;
+        const expiryDate = document.getElementById('course-expiry-date').value;
+        const preavviso = parseInt(document.getElementById('course-preavviso').value);
+
+        if (!conceivedDate || !expiryDate) {
+          alert("Inserisci sia la data di conseguimento che la data di scadenza.");
+          return;
+        }
+
+        // Calculate triggerDate
+        const expiryObj = new Date(expiryDate);
+        expiryObj.setDate(expiryObj.getDate() - preavviso);
+        const triggerDate = expiryObj.toISOString().split('T')[0];
+
+        // Rule: Delete old photo key permanently from storage on update
+        const oldPhoto = c.certPhoto;
+        const newPhoto = App.tempTrainingCertPhoto;
+        if (oldPhoto && oldPhoto !== newPhoto) {
+          MediaStore.remove(oldPhoto).catch(err => console.error(err));
+        }
+
+        Store.updateItem('worker_training', courseId, {
+          courseType,
+          conceivedDate,
+          expiryDate,
+          preavviso,
+          triggerDate,
+          certPhoto: newPhoto || null,
+          createdAt: new Date().toISOString()
+        });
+
+        if (typeof MediaStore !== 'undefined' && MediaStore.garbageCollect) {
+          MediaStore.garbageCollect().catch(err => console.error(err));
+        }
+
+        this.closeModal();
+        this.currentRecordId = c.workerId;
+        this.renderView('haccp_training_detail');
+      };
+    }
+
     modal.classList.add('active');
   },
 
@@ -4971,13 +6365,22 @@ const App = {
     const suffix = isEdit ? '-edit' : '';
     const nameInput = document.getElementById(`quick-ing-name${suffix}`);
     const unitInput = document.getElementById(`quick-ing-unit${suffix}`);
+    const allergenInput = document.getElementById(`quick-ing-allergen${suffix}`);
     const name = nameInput.value.trim();
     const unit = unitInput.value;
+    const allergenPresent = allergenInput ? allergenInput.checked : false;
 
     if (!name) { alert("Inserisci il nome dell'ingrediente."); return; }
 
+    // Controllo chiave univoca
+    const exists = (Store.data.ingredients || []).some(i => i.name.toLowerCase().trim() === name.toLowerCase());
+    if(exists) {
+      alert("Un ingrediente con questo nome è già presente in anagrafica.");
+      return;
+    }
+
     const newIng = Store.addItem('ingredients', {
-      name, unit, minStock: 5, allergens: [], stock: 0
+      name, unit, allergenPresent
     });
 
     // Update the select in the current modal
@@ -4993,6 +6396,7 @@ const App = {
     const toggleBtn = document.querySelector(`[onclick*='quick-ing-form${suffix}']`);
     if(toggleBtn) toggleBtn.style.display='block';
     nameInput.value = '';
+    if (allergenInput) allergenInput.checked = false;
   },
 
   handlePhoto(input, type) {
@@ -5020,6 +6424,45 @@ const App = {
         }
       };
       reader.readAsDataURL(files[i]);
+    }
+  },
+
+  handlePestMapPhoto(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const base64 = e.target.result;
+      const idbKey = await MediaStore.save(base64);
+      App.tempPestMapPhoto = idbKey;
+      const previewImg = document.getElementById('preview-pest-map');
+      const previewCont = document.getElementById('pest-map-preview-container');
+      if (previewImg && previewCont) {
+        previewImg.src = base64;
+        previewCont.style.display = 'block';
+      }
+    };
+    reader.readAsDataURL(file);
+  },
+
+  evaluatePestAnomalies() {
+    const rodent = document.getElementById('pest-rodent-signs')?.value || 'Assenti';
+    const sightings = document.getElementById('pest-direct-sightings')?.value || 'Nessun avvistamento';
+    const traps = document.getElementById('pest-trap-status')?.value || 'Tutte le trappole integre e attive';
+    const crawling = document.getElementById('pest-crawling-insects')?.value || 'Assenti';
+
+    const isAnomaly = rodent !== 'Assenti' ||
+                      sightings !== 'Nessun avvistamento' ||
+                      traps !== 'Tutte le trappole integre e attive' ||
+                      crawling !== 'Assenti';
+
+    const ncContainer = document.getElementById('pest-nc-notes-container');
+    if (ncContainer) {
+      ncContainer.style.display = isAnomaly ? 'block' : 'none';
+      if (!isAnomaly) {
+        const text = document.getElementById('pest-nc-notes');
+        if (text) text.value = '';
+      }
     }
   },
 
@@ -5059,6 +6502,92 @@ const App = {
     reader.readAsDataURL(file);
   },
 
+  handleTrainingCertPhoto(input) {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const base64 = e.target.result;
+      const idbKey = await MediaStore.save(base64);
+      App.tempTrainingCertPhoto = idbKey;
+      const previewImg = document.getElementById('preview-training-cert');
+      const previewCont = document.getElementById('training-cert-preview-container');
+      if (previewImg && previewCont) {
+        previewImg.src = base64;
+        previewCont.style.display = 'block';
+      }
+    };
+    reader.readAsDataURL(file);
+  },
+
+  handleTrainingReportPhoto(input, workerId) {
+    const file = input.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const base64 = e.target.result;
+      const idbKey = await MediaStore.save(base64);
+      
+      // Save directly as Section B HACCP Internal Report
+      const records = Store.data.worker_training || [];
+      const existingReport = records.find(r => r.workerId === workerId && r.type === 'report');
+      
+      if (existingReport) {
+        const oldPhoto = existingReport.reportPhoto;
+        // Rules: Delete old media key permanently on renewal/update
+        if (oldPhoto && oldPhoto !== idbKey) {
+          MediaStore.remove(oldPhoto).catch(err => console.error(err));
+        }
+        existingReport.reportPhoto = idbKey;
+        existingReport.createdAt = new Date().toISOString();
+        Store.updateItem('worker_training', existingReport.id, existingReport);
+      } else {
+        Store.addItem('worker_training', {
+          workerId,
+          type: 'report',
+          reportPhoto: idbKey,
+          createdAt: new Date().toISOString()
+        });
+      }
+      
+      if (typeof MediaStore !== 'undefined' && MediaStore.garbageCollect) {
+        MediaStore.garbageCollect().catch(err => console.error(err));
+      }
+      
+      alert("Verbale di addestramento HACCP caricato con successo!");
+      App.renderView('haccp_training_detail');
+    };
+    reader.readAsDataURL(file);
+  },
+
+  deleteTrainingReport(id, workerId) {
+    if (confirm("Sei sicuro di voler eliminare questo verbale di addestramento HACCP?")) {
+      const record = Store.data.worker_training.find(r => r.id === id);
+      if (record && record.reportPhoto) {
+        MediaStore.remove(record.reportPhoto).catch(err => console.error(err));
+      }
+      Store.removeItem('worker_training', id);
+      if (typeof MediaStore !== 'undefined' && MediaStore.garbageCollect) {
+        MediaStore.garbageCollect().catch(err => console.error(err));
+      }
+      this.renderView('haccp_training_detail');
+    }
+  },
+
+  deleteTrainingCourse(id, workerId) {
+    if (confirm("Sei sicuro di voler eliminare questo corso/attestato?")) {
+      const record = Store.data.worker_training.find(r => r.id === id);
+      if (record && record.certPhoto) {
+        MediaStore.remove(record.certPhoto).catch(err => console.error(err));
+      }
+      Store.removeItem('worker_training', id);
+      if (typeof MediaStore !== 'undefined' && MediaStore.garbageCollect) {
+        MediaStore.garbageCollect().catch(err => console.error(err));
+      }
+      this.renderView('haccp_training_detail');
+    }
+  },
+
   addIncomingItemRow() {
     const container = document.getElementById('incoming-items-container');
     const index = this.incomingItemCounter++;
@@ -5085,8 +6614,9 @@ const App = {
           <option value="">-- Seleziona Prodotto --</option>
           ${ingredients.map(i => `<option value="${i.id}">${i.name}</option>`).join('')}
         </select>
+        <div class="item-allergen-badge" style="display: none; margin-top: 5px;"></div>
       </div>
-
+      
       <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
         <div class="form-group">
           <label style="font-size: 11px;">Quantità (<span class="item-unit-label">-</span>)</label>
@@ -5114,9 +6644,25 @@ const App = {
   updateItemUnit(select, index) {
     const ingId = select.value;
     const ing = Store.data.ingredients.find(i => i.id === ingId);
-    const label = select.closest('.incoming-item-row').querySelector('.item-unit-label');
-    if(ing) label.innerText = ing.unit;
-    else label.innerText = '-';
+    const row = select.closest('.incoming-item-row');
+    const label = row.querySelector('.item-unit-label');
+    const allergenBadge = row.querySelector('.item-allergen-badge');
+    
+    if(ing) {
+      label.innerText = ing.unit;
+      
+      const hasAllergen = ing.allergenPresent === true || ing.allergen === true || (ing.allergens && ing.allergens.length > 0);
+      if (hasAllergen) {
+        const allergenNames = ing.allergens && ing.allergens.length > 0 ? ing.allergens.join(', ') : 'Allergene';
+        allergenBadge.innerHTML = `<span style="background: #fee2e2; color: #991b1b; padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 700; border: 1px solid #fecaca; display: inline-flex; align-items: center; gap: 4px;"><i class="ph-fill ph-warning"></i> Contiene: ${allergenNames}</span>`;
+        allergenBadge.style.display = 'block';
+      } else {
+        allergenBadge.style.display = 'none';
+      }
+    } else {
+      label.innerText = '-';
+      allergenBadge.style.display = 'none';
+    }
   },
 
   async enlargeImage(srcOrKey) {
@@ -5346,8 +6892,8 @@ const App = {
       return {
         name: details.name,
         quantity: ing.quantity,
-        isAllergen: details.allergen,
-        allergenName: details.allergenName
+        isAllergen: details.allergenPresent === true || details.allergen === true || (details.allergens && details.allergens.length > 0),
+        allergenName: details.allergenName || 'Allergene'
       };
     }).filter(i => i !== null).sort((a, b) => b.quantity - a.quantity);
 
@@ -5387,8 +6933,8 @@ const App = {
       return {
         name: details.name,
         quantity: ing.quantity,
-        isAllergen: details.allergen,
-        allergenName: details.allergenName
+        isAllergen: details.allergenPresent === true || details.allergen === true || (details.allergens && details.allergens.length > 0),
+        allergenName: details.allergenName || 'Allergene'
       };
     }).filter(i => i !== null).sort((a, b) => b.quantity - a.quantity);
 
@@ -5547,6 +7093,12 @@ const App = {
         this.exportNonCompliancePDF(title, from, to);
       } else if (tableName === 'haccp_structure') {
         this.exportStructurePDF(title, from, to);
+      } else if (tableName === 'haccp_pest') {
+        this.exportPestPDF(title, from, to);
+      } else if (tableName === 'worker_training') {
+        this.exportTrainingPDF(title, from, to);
+      } else if (tableName === 'trace_incoming') {
+        this.exportIncomingGoodsPDF(title, from, to);
       } else {
         this.exportPDF(tableName, title, from, to, filterId);
       }
@@ -5558,38 +7110,57 @@ const App = {
   },
 
   // Funzioni PDF con JsPDF
+  addStandardPDFHeader(doc, titleText, modelText) {
+    const company = Store.data.company || {};
+    const settings = Store.data.settings || {};
+    const applyModel = settings.applyModelNumber !== undefined ? settings.applyModelNumber : true;
+
+    doc.setFont("helvetica", "normal");
+    
+    // Left Header: Company info
+    doc.setFontSize(8);
+    doc.setTextColor(80, 80, 80);
+    doc.text(`Ragione Sociale: ${company.ragioneSociale || '-'}`, 14, 15);
+    doc.text(`Sede Legale: ${company.sedeLegale || '-'}`, 14, 19);
+    doc.text(`Sede Operativa: ${company.sedeOperativa || '-'}`, 14, 23);
+    doc.text(`Partita IVA: ${company.pIva || '-'}`, 14, 27);
+
+    // Right Header: Model code
+    if (applyModel && modelText) {
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(0, 0, 0);
+      const rightX = doc.internal.pageSize.width - 14;
+      doc.text(`Mod. ${modelText}`, rightX, 15, { align: "right" });
+    }
+
+    // Title
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(14);
+    doc.setTextColor(37, 99, 235);
+    doc.text(titleText.toUpperCase(), 14, 38);
+    
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(0, 0, 0);
+  },
+
   exportPDF(tableName, title, fromDate, toDate, eqFilter) {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF();
     
-    // Intestazione con logo simulato
-    doc.setFontSize(22);
-    doc.setTextColor(37, 99, 235); // Primary color
-    doc.text("HACCP & TRACCIABILITÀ", 14, 20);
-    doc.setFontSize(14);
-    doc.setTextColor(0, 0, 0);
     let titleText = title;
     if (fromDate && toDate) titleText += ` (Dal ${this.formatDate(fromDate)} al ${this.formatDate(toDate)})`;
-    doc.text(titleText, 14, 30);
-    
+
     const settings = Store.data.settings || {};
     const applyModel = settings.applyModelNumber !== undefined ? settings.applyModelNumber : true;
-    
     const modelConfigs = settings.model_configs || {};
-    let modelText = "";
     
-    if (tableName === 'haccp_temperature') modelText = modelConfigs['haccp_temperature']?.model || settings.modelTemperature || 'MOD-TEMP Rev.0';
-    else if (tableName === 'haccp_sanitation') modelText = modelConfigs['haccp_sanitation']?.model || settings.modelSanitation || 'MOD-SAN Rev.0';
-    else if (tableName === 'haccp_hygiene') modelText = modelConfigs['haccp_hygiene']?.model || settings.modelHygiene || 'MOD-HYG Rev.0';
-    else if (tableName === 'haccp_noncompliance') modelText = modelConfigs['haccp_noncompliance']?.model || settings.modelNonCompliance || 'MOD-NC Rev.0';
-    else if (tableName === 'haccp_structure') modelText = modelConfigs['haccp_structure']?.model || settings.modelStructure || 'MOD-STR Rev.0';
-    else if (tableName === 'trace_incoming') modelText = modelConfigs['trace_incoming']?.model || 'MOD-CAR Rev.0';
-    else if (tableName === 'trace_production') modelText = modelConfigs['trace_production']?.model || 'MOD-PROD Rev.0';
-    else modelText = modelConfigs[tableName]?.model || settings.modelGeneric || 'MOD-GEN Rev.0';
-    
+    let modelText = modelConfigs[tableName]?.model || settings.modelGeneric || 'MOD-GEN Rev.0';
     if (!applyModel) modelText = "";
 
-    let data = Store.getTable(tableName);
+    this.addStandardPDFHeader(doc, titleText, modelText);
+
+    let data = Store.getTable(tableName) || [];
     
     // Filtering
     if (fromDate || toDate || eqFilter) {
@@ -5603,27 +7174,47 @@ const App = {
       });
     }
 
-    if(data.length === 0) {
-      doc.setFontSize(10);
-      doc.text("Nessun dato presente nel registro per i filtri selezionati.", 14, 45);
+    // Determine headers and standard columns
+    let headers = [];
+    let tableData = [];
+
+    if (tableName === 'detergents') {
+      headers = ['ID', 'NOME'];
+      tableData = data.length > 0 ? data.map(item => [item.id, item.name]) : [['', '']];
+    } else if (tableName === 'work_environments') {
+      headers = ['ID', 'NOME AMBIENTE'];
+      tableData = data.length > 0 ? data.map(item => [item.id, item.name]) : [['', '']];
+    } else if (tableName === 'equipments') {
+      headers = ['ID', 'NOME ATTREZZATURA'];
+      tableData = data.length > 0 ? data.map(item => [item.id, item.name]) : [['', '']];
+    } else if (tableName === 'haccp_temp_equipments') {
+      headers = ['ID', 'NOME FRIGORIFERO', 'T. MIN (°C)', 'T. MAX (°C)'];
+      tableData = data.length > 0 ? data.map(item => [item.id, item.name, item.tempMin, item.tempMax]) : [['', '', '', '']];
     } else {
-      const keys = Object.keys(data[0]).filter(k => k !== 'id');
-      const tableData = data.map(item => keys.map(k => {
-        let val = item[k];
-        if (k === 'date' || k === 'createdAt') val = this.formatDate(val);
-        if(typeof val === 'object') return JSON.stringify(val);
-        return val;
-      }));
-      
-      doc.autoTable({
-        startY: 38,
-        head: [keys.map(k => k.toUpperCase().replace('ID', ''))],
-        body: tableData,
-        theme: 'grid',
-        headStyles: { fillColor: [37, 99, 235] },
-        styles: { fontSize: 9 }
-      });
+      // Fallback
+      if (data.length > 0) {
+        const keys = Object.keys(data[0]).filter(k => k !== 'id');
+        headers = keys.map(k => k.toUpperCase().replace('ID', ''));
+        tableData = data.map(item => keys.map(k => {
+          let val = item[k];
+          if (k === 'date' || k === 'createdAt') val = this.formatDate(val);
+          if (typeof val === 'object') return JSON.stringify(val);
+          return val;
+        }));
+      } else {
+        headers = ['REGISTRO'];
+        tableData = [['Nessun dato registrato']];
+      }
     }
+
+    doc.autoTable({
+      startY: 45,
+      head: [headers],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [37, 99, 235] },
+      styles: { fontSize: 9 }
+    });
 
     if(applyModel && modelText) {
       const pageCount = doc.internal.getNumberOfPages();
@@ -5642,20 +7233,16 @@ const App = {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF();
     
-    // Intestazione
-    doc.setFontSize(22);
-    doc.setTextColor(37, 99, 235);
-    doc.text("HACCP & TRACCIABILITÀ", 14, 20);
-    doc.setFontSize(14);
-    doc.setTextColor(0, 0, 0);
     let titleText = title;
     if (fromDate && toDate) titleText += ` (Dal ${this.formatDate(fromDate)} al ${this.formatDate(toDate)})`;
-    doc.text(titleText, 14, 30);
 
     const settings = Store.data.settings || {};
+    const applyModel = settings.applyModelNumber !== undefined ? settings.applyModelNumber : true;
     const modelConfigs = settings.model_configs || {};
     let modelText = modelConfigs['haccp_sanitation']?.model || settings.modelSanitation || "MOD-SAN Rev.0";
     if (!applyModel) modelText = "";
+
+    this.addStandardPDFHeader(doc, titleText, modelText);
 
     let records = Store.data.haccp_sanitation || [];
     
@@ -5669,66 +7256,65 @@ const App = {
       });
     }
     
-    if(records.length === 0) {
-      doc.setFontSize(10);
-      doc.text("Nessun dato presente nel registro.", 14, 45);
-    } else {
-      // Tabella Attrezzature
-      const eqData = [];
-      records.forEach(rec => {
-        if(rec.equipmentCleaned && rec.equipmentCleaned.length > 0) {
-          rec.equipmentCleaned.forEach(eq => {
-            eqData.push([this.formatDate(rec.date), eq.name, eq.detergentName, rec.operator]);
-          });
-        }
-      });
-
-      doc.setFontSize(12);
-      doc.text("Sezione: Attrezzature", 14, 42);
-      
-      doc.autoTable({
-        startY: 46,
-        head: [['DATA', 'ATTREZZATURA', 'DETERGENTE', 'OPERATORE']],
-        body: eqData.length > 0 ? eqData : [['-', '-', '-', '-']],
-        theme: 'grid',
-        headStyles: { fillColor: [37, 99, 235] },
-        styles: { fontSize: 9 },
-        margin: { bottom: 20 }
-      });
-
-      // Tabella Ambienti
-      const envData = [];
-      records.forEach(rec => {
-        if(rec.environmentsCleaned && rec.environmentsCleaned.length > 0) {
-          rec.environmentsCleaned.forEach(env => {
-            envData.push([this.formatDate(rec.date), env.name, env.detergentName, rec.operator]);
-          });
-        }
-      });
-
-      let finalY = doc.lastAutoTable.finalY || 50;
-      
-      // Controllo se c'è spazio sufficiente
-      if(finalY > doc.internal.pageSize.height - 40) {
-        doc.addPage();
-        finalY = 20;
-      } else {
-        finalY += 15;
+    // Tabella Attrezzature
+    const eqData = [];
+    records.forEach(rec => {
+      if(rec.equipmentCleaned && rec.equipmentCleaned.length > 0) {
+        rec.equipmentCleaned.forEach(eq => {
+          eqData.push([this.formatDate(rec.date), eq.name, eq.detergentName, rec.operator]);
+        });
       }
+    });
 
-      doc.setFontSize(12);
-      doc.text("Sezione: Ambienti di Lavoro", 14, finalY - 4);
-      
-      doc.autoTable({
-        startY: finalY,
-        head: [['DATA', 'AMBIENTE DI LAVORO', 'DETERGENTE', 'OPERATORE']],
-        body: envData.length > 0 ? envData : [['-', '-', '-', '-']],
-        theme: 'grid',
-        headStyles: { fillColor: [37, 99, 235] },
-        styles: { fontSize: 9 },
-        margin: { bottom: 20 }
-      });
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "bold");
+    doc.text("Sezione: Attrezzature", 14, 46);
+    doc.setFont("helvetica", "normal");
+    
+    doc.autoTable({
+      startY: 50,
+      head: [['DATA', 'ATTREZZATURA', 'DETERGENTE', 'FIRMA']],
+      body: eqData.length > 0 ? eqData : [['', '', '', '']],
+      theme: 'grid',
+      headStyles: { fillColor: [37, 99, 235] },
+      styles: { fontSize: 9 },
+      margin: { bottom: 20 }
+    });
+
+    // Tabella Ambienti
+    const envData = [];
+    records.forEach(rec => {
+      if(rec.environmentsCleaned && rec.environmentsCleaned.length > 0) {
+        rec.environmentsCleaned.forEach(env => {
+          envData.push([this.formatDate(rec.date), env.name, env.detergentName, rec.operator]);
+        });
+      }
+    });
+
+    let finalY = doc.lastAutoTable.finalY || 50;
+    
+    // Controllo se c'è spazio sufficiente
+    if(finalY > doc.internal.pageSize.height - 40) {
+      doc.addPage();
+      finalY = 20;
+    } else {
+      finalY += 15;
     }
+
+    doc.setFontSize(12);
+    doc.setFont("helvetica", "bold");
+    doc.text("Sezione: Ambienti di Lavoro", 14, finalY - 4);
+    doc.setFont("helvetica", "normal");
+    
+    doc.autoTable({
+      startY: finalY,
+      head: [['DATA', 'AMBIENTE DI LAVORO', 'DETERGENTE', 'FIRMA']],
+      body: envData.length > 0 ? envData : [['', '', '', '']],
+      theme: 'grid',
+      headStyles: { fillColor: [37, 99, 235] },
+      styles: { fontSize: 9 },
+      margin: { bottom: 20 }
+    });
 
     if(applyModel && modelText) {
       const pageCount = doc.internal.getNumberOfPages();
@@ -5747,19 +7333,16 @@ const App = {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF('landscape'); // Orizzontale per far stare tutte le colonne
     
-    doc.setFontSize(20);
-    doc.setTextColor(37, 99, 235);
-    doc.text("HACCP & TRACCIABILITÀ", 14, 20);
-    doc.setFontSize(14);
-    doc.setTextColor(0, 0, 0);
     let titleText = title;
     if (fromDate && toDate) titleText += ` (Dal ${this.formatDate(fromDate)} al ${this.formatDate(toDate)})`;
-    doc.text(titleText, 14, 30);
 
     const settings = Store.data.settings || {};
+    const applyModel = settings.applyModelNumber !== undefined ? settings.applyModelNumber : true;
     const modelConfigs = settings.model_configs || {};
     let modelText = modelConfigs['haccp_temperature']?.model || settings.modelTemperature || "MOD-TEMP Rev.0";
     if (!applyModel) modelText = "";
+
+    this.addStandardPDFHeader(doc, titleText, modelText);
 
     let records = Store.data.haccp_temperature || [];
     
@@ -5773,34 +7356,29 @@ const App = {
       return pass;
     }).sort((a,b) => new Date(a.date + 'T' + (a.time||'00:00')) - new Date(b.date + 'T' + (b.time||'00:00')));
     
-    if(records.length === 0) {
-      doc.setFontSize(10);
-      doc.text("Nessun dato presente nel registro per i filtri selezionati.", 14, 45);
-    } else {
-      const tableData = records.map(r => [
-        this.formatDate(r.date),
-        r.time || '-',
-        r.equipmentName || 'N/D',
-        r.equipmentLocation || 'N/D',
-        r.temp !== undefined ? r.temp + '°C' : (r.status === 'GIUSTIFICATO' ? 'GIUSTIF.' : '-'),
-        r.equipmentRange || '-',
-        r.status,
-        r.status === 'NON CONFORME' ? (r.correctiveAction || '-') : (r.justification || ''),
-        r.operator || '-'
-      ]);
+    const tableData = records.length > 0 ? records.map(r => [
+      this.formatDate(r.date),
+      r.time || '-',
+      r.equipmentName || 'N/D',
+      r.equipmentLocation || 'N/D',
+      r.temp !== undefined ? r.temp + '°C' : (r.status === 'GIUSTIFICATO' ? 'GIUSTIF.' : '-'),
+      r.equipmentRange || '-',
+      r.status,
+      r.status === 'NON CONFORME' ? (r.correctiveAction || '-') : (r.justification || ''),
+      r.operator || '-'
+    ]) : [['', '', '', '', '', '', '', '', '']];
 
-      doc.autoTable({
-        startY: 38,
-        head: [['DATA', 'ORA', 'ATTREZZATURA', 'UBICAZIONE', 'TEMP.', 'RANGE', 'CONF.', 'NOTE / AZ. CORRETTIVA', 'FIRMA']],
-        body: tableData,
-        theme: 'grid',
-        headStyles: { fillColor: [37, 99, 235], fontSize: 8 },
-        styles: { fontSize: 8, cellPadding: 2 },
-        columnStyles: {
-          7: { cellWidth: 40 } // Più spazio per le note
-        }
-      });
-    }
+    doc.autoTable({
+      startY: 45,
+      head: [['DATA', 'ORA', 'ATTREZZATURA', 'UBICAZIONE', 'TEMP.', 'RANGE', 'CONF.', 'NOTE / AZ. CORRETTIVA', 'FIRMA']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [37, 99, 235], fontSize: 8 },
+      styles: { fontSize: 8, cellPadding: 2 },
+      columnStyles: {
+        7: { cellWidth: 40 } // Più spazio per le note
+      }
+    });
 
     if(applyModel && modelText) {
       const pageCount = doc.internal.getNumberOfPages();
@@ -5819,6 +7397,7 @@ const App = {
     const { jsPDF } = window.jspdf;
     
     const settings = Store.data.settings || {};
+    const applyModel = settings.applyModelNumber !== undefined ? settings.applyModelNumber : true;
     const modelConfigs = settings.model_configs || {};
     let modelText = modelConfigs['haccp_hygiene']?.model || settings.modelHygiene || "MOD-HYG Rev.0";
     if (!applyModel) modelText = "";
@@ -5847,14 +7426,6 @@ const App = {
       });
     });
 
-    if (expandedData.length === 0) {
-      const doc = new jsPDF();
-      doc.setFontSize(10);
-      doc.text("Nessun dato presente nel registro per i filtri selezionati.", 14, 20);
-      doc.save(`igiene_personale_export.pdf`);
-      return;
-    }
-
     const checklistFullLabels = [
       "Indumenti da lavoro",
       "Calzature",
@@ -5870,15 +7441,13 @@ const App = {
     if (!workerId) {
       // MODALITÀ COMPATTA (LANDSCAPE) - TUTTI I LAVORATORI
       const doc = new jsPDF('landscape');
-      doc.setFontSize(20);
-      doc.setTextColor(37, 99, 235);
-      doc.text("HACCP & TRACCIABILITÀ", 14, 15);
-      doc.setFontSize(14);
-      doc.setTextColor(0, 0, 0);
-      doc.text(`REGISTRO IGIENE PERSONALE - TUTTI I LAVORATORI`, 14, 25);
-      if (fromDate && toDate) doc.setFontSize(10), doc.text(`Periodo: dal ${this.formatDate(fromDate)} al ${this.formatDate(toDate)}`, 14, 32);
+      
+      let titleText = title + ' - TUTTI I LAVORATORI';
+      if (fromDate && toDate) titleText += ` (Dal ${this.formatDate(fromDate)} al ${this.formatDate(toDate)})`;
 
-      const tableData = expandedData.map(r => {
+      this.addStandardPDFHeader(doc, titleText, modelText);
+
+      const tableData = expandedData.length > 0 ? expandedData.map(r => {
         const row = [this.formatDate(r.date), r.workerName];
         let specificActions = [];
         checklistFullLabels.forEach(label => {
@@ -5892,10 +7461,10 @@ const App = {
         row.push(allNotes || '-');
         row.push(r.operator);
         return row;
-      });
+      }) : [['', '', '', '', '', '', '', '', '', '', '', '', '']];
 
       doc.autoTable({
-        startY: 38,
+        startY: 45,
         head: [['DATA', 'LAVORATORE', ...checklistFullLabels, 'NOTE / AZIONI', 'FIRMA']],
         body: tableData,
         theme: 'grid',
@@ -5936,15 +7505,32 @@ const App = {
     } else {
       // MODALITÀ DETTAGLIATA (PORTRAIT) - SINGOLO LAVORATORE
       const doc = new jsPDF();
+
+      if (expandedData.length === 0) {
+        let titleText = title + ' - SINGOLO LAVORATORE';
+        this.addStandardPDFHeader(doc, titleText, modelText);
+        doc.autoTable({
+          startY: 45,
+          head: [['VOCE DI CONTROLLO', 'ESITO', 'AZIONI CORRETTIVE', 'FIRMA']],
+          body: [['', '', '', '']],
+          theme: 'grid',
+          headStyles: { fillColor: [37, 99, 235] },
+          styles: { fontSize: 9 }
+        });
+        
+        if(applyModel && modelText) {
+          doc.setFontSize(8);
+          doc.text(modelText, 14, doc.internal.pageSize.height - 10);
+        }
+        doc.save(`igiene_personale_singolo.pdf`);
+        return;
+      }
+
       expandedData.forEach((r, idx) => {
         if (idx > 0) doc.addPage();
         
-        doc.setFontSize(22);
-        doc.setTextColor(37, 99, 235);
-        doc.text("HACCP & TRACCIABILITÀ", 14, 20);
-        doc.setFontSize(14);
-        doc.setTextColor(0, 0, 0);
-        doc.text("SCHEDA VERIFICA IGIENE PERSONALE", 14, 30);
+        let titleText = "SCHEDA VERIFICA IGIENE PERSONALE";
+        this.addStandardPDFHeader(doc, titleText, modelText);
 
         let y = 45;
         doc.setFontSize(11);
@@ -5960,13 +7546,14 @@ const App = {
         const detailedChecks = (r.checks || []).map(c => [
           c.label,
           c.status === 'C' ? 'C (Conforme)' : 'NC (Non Conforme)',
-          c.status === 'NC' ? (c.correctiveAction || 'Nessuna specifica') : '-'
+          c.status === 'NC' ? (c.correctiveAction || 'Nessuna specifica') : '-',
+          r.operator || '-'
         ]);
 
         doc.autoTable({
           startY: y,
-          head: [['VOCE DI CONTROLLO', 'ESITO', 'AZIONI CORRETTIVE']],
-          body: detailedChecks,
+          head: [['VOCE DI CONTROLLO', 'ESITO', 'AZIONI CORRETTIVE', 'FIRMA']],
+          body: detailedChecks.length > 0 ? detailedChecks : [['', '', '', '']],
           theme: 'grid',
           headStyles: { fillColor: [37, 99, 235] },
           styles: { fontSize: 9 },
@@ -6010,10 +7597,16 @@ const App = {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF('landscape');
     
+    let titleText = title;
+    if (fromDate && toDate) titleText += ` (Dal ${this.formatDate(fromDate)} al ${this.formatDate(toDate)})`;
+
     const settings = Store.data.settings || {};
+    const applyModel = settings.applyModelNumber !== undefined ? settings.applyModelNumber : true;
     const modelConfigs = settings.model_configs || {};
     let modelText = modelConfigs['haccp_noncompliance']?.model || settings.modelNonCompliance || "MOD-NC Rev.0";
     if (!applyModel) modelText = "";
+
+    this.addStandardPDFHeader(doc, titleText, modelText);
 
     let rawRecords = Store.data.haccp_noncompliance || [];
     let filteredRecords = rawRecords.filter(item => {
@@ -6024,27 +7617,20 @@ const App = {
       return pass;
     }).sort((a,b) => new Date(a.date) - new Date(b.date));
 
-    doc.setFontSize(22);
-    doc.setTextColor(37, 99, 235);
-    doc.text("HACCP & TRACCIABILITÀ", 14, 20);
-    doc.setFontSize(14);
-    doc.setTextColor(0, 0, 0);
-    doc.text(`REGISTRO NON CONFORMITÀ ED AZIONI CORRETTIVE`, 14, 30);
-    if (fromDate && toDate) doc.setFontSize(10), doc.text(`Periodo: dal ${this.formatDate(fromDate)} al ${this.formatDate(toDate)}`, 14, 37);
-
-    const tableData = filteredRecords.map(r => [
+    const tableData = filteredRecords.length > 0 ? filteredRecords.map(r => [
       this.formatDate(r.date),
       r.description,
       r.correctiveAction,
       r.responsibleWorker,
       this.formatDate(r.dueDate),
       r.isClosed ? 'CHIUSA' : 'APERTA',
-      r.closedDate ? this.formatDate(r.closedDate) : '-'
-    ]);
+      r.closedDate ? this.formatDate(r.closedDate) : '-',
+      r.operator || '-'
+    ]) : [['', '', '', '', '', '', '', '']];
 
     doc.autoTable({
       startY: 45,
-      head: [['DATA RIL.', 'DESCRIZIONE NC', 'AZIONE CORRETTIVA', 'RESPONSABILE', 'SCADENZA', 'STATO', 'CHIUSURA']],
+      head: [['DATA RIL.', 'DESCRIZIONE NC', 'AZIONE CORRETTIVA', 'RESPONSABILE', 'SCADENZA', 'STATO', 'CHIUSURA', 'FIRMA']],
       body: tableData,
       theme: 'grid',
       headStyles: { fillColor: [37, 99, 235], fontSize: 9 },
@@ -6055,7 +7641,7 @@ const App = {
         5: { fontStyle: 'bold', halign: 'center' }
       },
       didDrawCell: (data) => {
-        if (data.section === 'body' && data.column.index === 5) {
+        if (data.section === 'body' && data.column.index === 5 && data.cell.raw) {
           if (data.cell.raw === 'APERTA') doc.setTextColor(200, 0, 0);
           else doc.setTextColor(0, 150, 0);
         }
@@ -6079,7 +7665,11 @@ const App = {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF('portrait');
     
+    let titleText = title;
+    if (fromDate && toDate) titleText += ` (Dal ${this.formatDate(fromDate)} al ${this.formatDate(toDate)})`;
+
     const settings = Store.data.settings || {};
+    const applyModel = settings.applyModelNumber !== undefined ? settings.applyModelNumber : true;
     const modelConfigs = settings.model_configs || {};
     let modelText = modelConfigs['haccp_structure']?.model || settings.modelStructure || "MOD-STR Rev.0";
     if (!applyModel) modelText = "";
@@ -6088,44 +7678,62 @@ const App = {
     let filteredRecords = rawRecords.filter(item => {
       let d = item.date || '';
       return (!fromDate || d >= fromDate) && (!toDate || d <= toDate);
-    }).sort((a,b) => new Date(a.date) - new Date(b.date));
+    }).sort((a,b) => new Date(a.date) - new Date(a.date));
 
-    filteredRecords.forEach((r, idx) => {
-      if (idx > 0) doc.addPage();
-      
-      doc.setFontSize(20);
-      doc.setTextColor(37, 99, 235);
-      doc.text("HACCP & TRACCIABILITÀ", 14, 20);
-      doc.setFontSize(14);
-      doc.setTextColor(0, 0, 0);
-      doc.text("SCHEDA CONTROLLO AMBIENTI E STRUTTURE", 14, 30);
-      
-      doc.setFontSize(10);
-      doc.text(`Data: ${this.formatDate(r.date)}`, 14, 40);
-      doc.text(`Frequenza: ${r.frequency}`, 70, 40);
-      doc.text(`Ambiente: ${r.environment}`, 14, 47);
-      doc.text(`Operatore: ${r.operator}`, 70, 47);
-
-      const tableData = r.checks.map(c => [
-        c.label,
-        c.status,
-        c.correctiveAction || '-'
-      ]);
-
+    if (filteredRecords.length === 0) {
+      this.addStandardPDFHeader(doc, titleText, modelText);
       doc.autoTable({
-        startY: 55,
-        head: [['PUNTO DI CONTROLLO', 'ESITO', 'AZIONE CORRETTIVA']],
-        body: tableData,
+        startY: 45,
+        head: [['PUNTO DI CONTROLLO', 'ESITO', 'AZIONE CORRETTIVA', 'FIRMA']],
+        body: [['', '', '', '']],
         theme: 'grid',
         headStyles: { fillColor: [37, 99, 235] },
         columnStyles: {
           1: { halign: 'center', cellWidth: 20 },
           2: { cellWidth: 80 }
+        }
+      });
+      
+      if(applyModel && modelText) {
+        doc.setFontSize(8);
+        doc.text(modelText, 14, doc.internal.pageSize.height - 10);
+      }
+      doc.save(`registro_ambienti_strutture.pdf`);
+      return;
+    }
+
+    filteredRecords.forEach((r, idx) => {
+      if (idx > 0) doc.addPage();
+      
+      this.addStandardPDFHeader(doc, titleText, modelText);
+      
+      doc.setFontSize(10);
+      doc.text(`Data: ${this.formatDate(r.date)}`, 14, 45);
+      doc.text(`Frequenza: ${r.frequency || 'Settimanale'}`, 70, 45);
+      doc.text(`Ambiente: ${r.environment}`, 14, 51);
+      doc.text(`Operatore: ${r.operator}`, 70, 51);
+
+      const tableData = (r.checks || []).map(c => [
+        c.label,
+        c.status,
+        c.correctiveAction || '-',
+        r.operator || '-'
+      ]);
+
+      doc.autoTable({
+        startY: 57,
+        head: [['PUNTO DI CONTROLLO', 'ESITO', 'AZIONE CORRETTIVA', 'FIRMA']],
+        body: tableData.length > 0 ? tableData : [['', '', '', '']],
+        theme: 'grid',
+        headStyles: { fillColor: [37, 99, 235] },
+        columnStyles: {
+          1: { halign: 'center', cellWidth: 20 },
+          2: { cellWidth: 60 }
         },
         didDrawCell: (data) => {
-          if (data.section === 'body' && data.column.index === 1) {
+          if (data.section === 'body' && data.column.index === 1 && data.cell.raw) {
             if (data.cell.raw === 'NC') doc.setTextColor(200, 0, 0);
-            else doc.setTextColor(0, 150, 0);
+            else if (data.cell.raw === 'C') doc.setTextColor(0, 150, 0);
           }
         }
       });
@@ -6144,6 +7752,183 @@ const App = {
     });
 
     doc.save(`registro_ambienti_strutture.pdf`);
+  },
+
+  exportPestPDF(title, fromDate, toDate) {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF('landscape');
+
+    let titleText = title;
+    if (fromDate && toDate) titleText += ` (Dal ${this.formatDate(fromDate)} al ${this.formatDate(toDate)})`;
+
+    const settings = Store.data.settings || {};
+    const applyModel = settings.applyModelNumber !== undefined ? settings.applyModelNumber : true;
+    const modelConfigs = settings.model_configs || {};
+    let modelText = modelConfigs['haccp_pest']?.model || settings.modelPest || "MOD-INF Rev.0";
+    if (!applyModel) modelText = "";
+
+    this.addStandardPDFHeader(doc, titleText, modelText);
+
+    let rawRecords = Store.data.haccp_pest || [];
+    let filteredRecords = rawRecords.filter(item => {
+      let d = item.date || '';
+      return (!fromDate || d >= fromDate) && (!toDate || d <= toDate);
+    }).sort((a,b) => new Date(a.date) - new Date(b.date));
+
+    const tableData = filteredRecords.length > 0 ? filteredRecords.map(r => [
+      this.formatDate(r.date),
+      r.trapsCount || '-',
+      r.rodentSigns || '-',
+      r.directSightings || '-',
+      r.trapStatus || '-',
+      r.crawlingInsects || '-',
+      r.notes || '-',
+      r.status,
+      r.operator || '-'
+    ]) : [['', '', '', '', '', '', '', '', '']];
+
+    doc.autoTable({
+      startY: 45,
+      head: [['DATA', 'TRAPPOLE', 'RODITORI', 'AVVISTAM.', 'STATO TR.', 'STRISCIANTI', 'NOTE ANOMALIE', 'ESITO', 'FIRMA']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [37, 99, 235], fontSize: 8 },
+      styles: { fontSize: 8 },
+      didDrawCell: (data) => {
+        if (data.section === 'body' && data.column.index === 7 && data.cell.raw) {
+          if (data.cell.raw === 'NON CONFORME') doc.setTextColor(200, 0, 0);
+          else doc.setTextColor(0, 150, 0);
+        }
+      }
+    });
+
+    if(applyModel && modelText) {
+      const pageCount = doc.internal.getNumberOfPages();
+      for(let i = 1; i <= pageCount; i++) {
+         doc.setPage(i);
+         doc.setFontSize(8);
+         doc.text(modelText, 14, doc.internal.pageSize.height - 10);
+      }
+    }
+
+    doc.save(`registro_infestanti.pdf`);
+  },
+
+  exportTrainingPDF(title, fromDate, toDate) {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF('landscape');
+
+    let titleText = title;
+    if (fromDate && toDate) titleText += ` (Dal ${this.formatDate(fromDate)} al ${this.formatDate(toDate)})`;
+
+    const settings = Store.data.settings || {};
+    const applyModel = settings.applyModelNumber !== undefined ? settings.applyModelNumber : true;
+    const modelConfigs = settings.model_configs || {};
+    let modelText = modelConfigs['worker_training']?.model || "MOD-FOR Rev.0";
+    if (!applyModel) modelText = "";
+
+    this.addStandardPDFHeader(doc, titleText, modelText);
+
+    let rawRecords = Store.data.worker_training || [];
+    let filteredRecords = rawRecords.filter(item => {
+      let d = item.createdAt ? item.createdAt.split('T')[0] : '';
+      return (!fromDate || d >= fromDate) && (!toDate || d <= toDate);
+    }).sort((a,b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+    const tableData = filteredRecords.length > 0 ? filteredRecords.map(r => {
+      const w = Store.data.workers.find(x => x.id === r.workerId);
+      const workerName = w ? `${w.lastName} ${w.firstName}` : 'Sconosciuto';
+      if (r.type === 'course') {
+        return [
+          workerName,
+          'SEZIONE A: Corso e Attestato',
+          r.courseType || '-',
+          this.formatDate(r.conceivedDate) || '-',
+          this.formatDate(r.expiryDate) || '-'
+        ];
+      } else {
+        return [
+          workerName,
+          'SEZIONE B: HACCP Interno',
+          'Verbale Addestramento HACCP',
+          '-',
+          '-'
+        ];
+      }
+    }) : [['', '', '', '', '']];
+
+    doc.autoTable({
+      startY: 45,
+      head: [['LAVORATORE', 'SEZIONE / CATEGORIA', 'DETTAGLIO CORSO / DOC', 'DATA CONS.', 'DATA SCAD.']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [37, 99, 235], fontSize: 9 },
+      styles: { fontSize: 8 }
+    });
+
+    if(applyModel && modelText) {
+      const pageCount = doc.internal.getNumberOfPages();
+      for(let i = 1; i <= pageCount; i++) {
+         doc.setPage(i);
+         doc.setFontSize(8);
+         doc.text(modelText, 14, doc.internal.pageSize.height - 10);
+      }
+    }
+
+    doc.save(`registro_formazione_lavoratori.pdf`);
+  },
+
+  exportIncomingGoodsPDF(title, fromDate, toDate) {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF('landscape');
+
+    let titleText = title;
+    if (fromDate && toDate) titleText += ` (Dal ${this.formatDate(fromDate)} al ${this.formatDate(toDate)})`;
+
+    const settings = Store.data.settings || {};
+    const applyModel = settings.applyModelNumber !== undefined ? settings.applyModelNumber : true;
+    const modelConfigs = settings.model_configs || {};
+    let modelText = modelConfigs['trace_incoming']?.model || "MOD-CAR Rev.0";
+    if (!applyModel) modelText = "";
+
+    this.addStandardPDFHeader(doc, titleText, modelText);
+
+    let rawRecords = Store.data.incoming_goods || [];
+    let filteredRecords = rawRecords.filter(item => {
+      let d = item.date || '';
+      return (!fromDate || d >= fromDate) && (!toDate || d <= toDate);
+    }).sort((a,b) => new Date(a.date) - new Date(b.date));
+
+    const tableData = filteredRecords.length > 0 ? filteredRecords.map(r => [
+      this.formatDate(r.date),
+      r.ingredientName || '-',
+      r.lot || '-',
+      r.lotInterno || '-',
+      r.expiry ? this.formatDate(r.expiry) : '-',
+      r.quantity || '-',
+      r.unit || '-',
+      r.supplierName || '-'
+    ]) : [['', '', '', '', '', '', '', '']];
+
+    doc.autoTable({
+      startY: 45,
+      head: [['DATA ACQUISTO', 'INGREDIENTE', 'LOTTO FORNITORE', 'LOTTO INTERNO', 'SCADENZA', 'QUANTITA\'', 'U.M.', 'FORNITORE']],
+      body: tableData,
+      theme: 'grid',
+      headStyles: { fillColor: [37, 99, 235], fontSize: 9 },
+      styles: { fontSize: 8 }
+    });
+
+    if(applyModel && modelText) {
+      const pageCount = doc.internal.getNumberOfPages();
+      for(let i = 1; i <= pageCount; i++) {
+         doc.setPage(i);
+         doc.setFontSize(8);
+         doc.text(modelText, 14, doc.internal.pageSize.height - 10);
+      }
+    }
+
+    doc.save(`registro_carico_merci.pdf`);
   },
 
   exportLabelPDF(name, ingredientsText, lot, expiry, weight, storage, expiryWording, osa) {
@@ -6211,9 +7996,12 @@ const App = {
     const doc = new jsPDF({ orientation: "landscape" });
     const today = new Date().toLocaleDateString();
 
+    const settings = Store.data.settings || {};
+    const modelConfigs = settings.model_configs || {};
+
     if (type === 'recipes') {
-      doc.setFontSize(14);
-      doc.text(`Report Ricettario - ${today}`, 14, 15);
+      let modelText = modelConfigs['trace_recipes']?.model || 'MOD-RIC Rev.0';
+      this.addStandardPDFHeader(doc, `Report Ricettario`, modelText);
       
       const recipes = Store.data.recipes || [];
       const ingredients = Store.data.ingredients || [];
@@ -6227,7 +8015,7 @@ const App = {
         head.push(`INGR. ${i} / QTA`);
       }
       
-      const body = recipes.map(r => {
+      const body = recipes.length > 0 ? recipes.map(r => {
         const row = [r.name];
         for(let i=0; i<maxIng; i++) {
           if (r.ingredients && r.ingredients[i]) {
@@ -6239,30 +8027,30 @@ const App = {
           }
         }
         return row;
-      });
+      }) : [[...head].map(() => '')];
       
-      doc.autoTable({ startY: 20, head: [head], body: body, theme: 'grid', styles: { fontSize: 8 }});
+      doc.autoTable({ startY: 45, head: [head], body: body, theme: 'grid', styles: { fontSize: 8 }});
       doc.save(`report_ricettario_${today.replace(/\//g,'-')}.pdf`);
       
     } else if (type === 'suppliers') {
-      doc.setFontSize(14);
-      doc.text(`Elenco Fornitori Qualificati - ${today}`, 14, 15);
+      let modelText = modelConfigs['trace_suppliers']?.model || 'MOD-FOR Rev.0';
+      this.addStandardPDFHeader(doc, `Elenco Fornitori Qualificati`, modelText);
       
       const suppliers = Store.data.suppliers || [];
-      const body = suppliers.map(s => [
+      const body = suppliers.length > 0 ? suppliers.map(s => [
         s.name,
         s.contact || '-',
         s.phone || '-',
         s.vat || '-',
         s.inactive ? 'Inattivo' : 'Attivo'
-      ]);
+      ]) : [['', '', '', '', '']];
       
-      doc.autoTable({ startY: 20, head: [['FORNITORE', 'CONTATTO', 'TELEFONO', 'P.IVA / CF', 'STATO']], body: body, theme: 'grid' });
+      doc.autoTable({ startY: 45, head: [['FORNITORE', 'CONTATTO', 'TELEFONO', 'P.IVA / CF', 'STATO']], body: body, theme: 'grid' });
       doc.save(`report_fornitori_${today.replace(/\//g,'-')}.pdf`);
       
     } else if (type === 'production') {
-      doc.setFontSize(14);
-      doc.text(`Registro di Produzione - ${today}`, 14, 15);
+      let modelText = modelConfigs['trace_production']?.model || 'MOD-PROD Rev.0';
+      this.addStandardPDFHeader(doc, `Registro di Produzione`, modelText);
       
       const productions = Store.data.productions || [];
       let maxIng = 1;
@@ -6273,7 +8061,7 @@ const App = {
         head.push(`INGR. ${i} + LOTTO`);
       }
       
-      const body = productions.sort((a,b) => new Date(b.date) - new Date(a.date)).map(p => {
+      const body = productions.length > 0 ? productions.sort((a,b) => new Date(b.date) - new Date(a.date)).map(p => {
         const row = [this.formatDate(p.date), p.recipeName, p.lot];
         for(let i=0; i<maxIng; i++) {
           if (p.ingredients && p.ingredients[i]) {
@@ -6286,71 +8074,169 @@ const App = {
           }
         }
         return row;
-      });
+      }) : [[...head].map(() => '')];
       
-      doc.autoTable({ startY: 20, head: [head], body: body, theme: 'grid', styles: { fontSize: 8 } });
+      doc.autoTable({ startY: 45, head: [head], body: body, theme: 'grid', styles: { fontSize: 8 } });
       doc.save(`report_produzione_${today.replace(/\//g,'-')}.pdf`);
       
-    } else if (type === 'inventory') {
-      doc.setFontSize(14);
-      doc.text(`Giacenze di Magazzino (Laboratorio) - ${today}`, 14, 15);
+    } else if (type === 'ingredients') {
+      let modelText = modelConfigs['trace_ingredients']?.model || 'MOD-ING Rev.0';
+      this.addStandardPDFHeader(doc, `Anagrafica Ingredienti Generici`, modelText);
       
-      // Calculate available goods per lot
-      const goods = Store.data.incoming_goods || [];
-      const prods = Store.data.productions || [];
+      const ingredients = Store.data.ingredients || [];
+      const body = ingredients.length > 0 ? ingredients.map(ing => [
+        ing.name,
+        ing.unit,
+        ing.allergenPresent ? 'SI' : 'NO'
+      ]) : [['', '', '']];
       
-      const stockItems = [];
-      
-      goods.forEach(g => {
-        const used = prods.reduce((acc, p) => {
-          const ingUsed = (p.ingredients || []).find(i => i.incomingId === g.id);
-          return acc + (ingUsed ? parseFloat(ingUsed.quantity) : 0);
-        }, 0);
-        const adj = (g.adjustments || []).reduce((acc, a) => acc + (parseFloat(a.quantity) || 0), 0);
-        const available = parseFloat(g.quantity) - used - adj;
-        
-        if (available > 0.001) {
-          stockItems.push({
-            name: g.ingredientName,
-            lot: g.lotInterno || '-',
-            supplier: g.supplierName,
-            date: g.date,
-            expiry: g.expiry,
-            qty: available,
-            unit: g.unit,
-            qrText: window.location.href.split('?')[0] + '?view=trace_incoming_detail&id=' + g.id
-          });
-        }
+      doc.autoTable({
+        startY: 45,
+        head: [['NOME INGREDIENTE', 'UNITA\' DI MISURA', 'ALLERGENE']],
+        body: body,
+        theme: 'grid'
       });
-      
-      const head = [['MATERIA PRIMA', 'LOTTO INT.', 'FORNITORE', 'GIACENZA', 'SCADENZA', 'QR TRACCIABILITA\'']];
-      
-      const body = stockItems.sort((a,b) => new Date(a.expiry) - new Date(b.expiry)).map(item => [
-        item.name,
-        item.lot,
-        item.supplier,
-        `${item.qty.toFixed(2)} ${item.unit}`,
-        this.formatDate(item.expiry),
-        item.qrText
-      ]);
-      
-      doc.autoTable({ 
-        startY: 20, 
-        head: head, 
-        body: body, 
-        theme: 'grid',
-        didDrawCell: function(data) {
-          if (data.section === 'body' && data.column.index === 5 && data.cell.raw) {
-            // we can't easily draw QR code natively without an image, so we just print the URL for the user
-            // To be precise with jsPDF we could use qrCode but it takes async drawing. 
-            // We just render the text which acts as the QR content. 
-            // In a real PDF, if they scan the text (if hyperlinked) or just read it, it works.
-          }
-        }
-      });
-      
-      doc.save(`report_magazzino_${today.replace(/\//g,'-')}.pdf`);
+      doc.save(`report_ingredienti_${today.replace(/\//g,'-')}.pdf`);
     }
+  },
+
+  onSaleClientChange(clientId) {
+    const client = (Store.data.clients || []).find(c => c.id === clientId);
+    const deliveryInput = document.getElementById('sale-delivery-address');
+    if (client && deliveryInput) {
+      deliveryInput.value = client.officeAddress || '';
+    }
+  },
+
+  addSaleItemRow() {
+    const container = document.getElementById('sale-items-container');
+    if (!container) return;
+    const index = this.saleItemCounter++;
+    const row = document.createElement('div');
+    row.className = 'sale-item-row';
+    row.id = `sale-item-row-${index}`;
+    row.style = 'display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; background: rgba(0,0,0,0.02); padding: 10px; border-radius: 8px; border: 1px solid var(--border-color);';
+    
+    const productions = Store.data.productions || [];
+    
+    row.innerHTML = `
+      <div style="display: flex; gap: 10px; align-items: center;">
+        <div style="flex: 2;">
+          <select class="sale-prod-select" onchange="App.onSaleProductChange(${index}, this.value)" style="width: 100%; font-size: 13px;">
+            <option value="">-- Seleziona Produzione --</option>
+            ${productions.map(p => `<option value="${p.id}">${p.recipeName} (Lotto: ${p.lot}, TMC: ${this.formatDate(p.expiry)})</option>`).join('')}
+          </select>
+        </div>
+        <div style="width: 100px;">
+          <input type="number" class="sale-qty-input" placeholder="Qtà" step="any" style="width: 100%; font-size: 13px; padding: 6px;" />
+        </div>
+        <button type="button" class="btn-danger" style="width: 34px; height: 34px; padding: 0; display: flex; align-items: center; justify-content: center;" onclick="document.getElementById('sale-item-row-${index}').remove()"><i class="ph ph-trash"></i></button>
+      </div>
+      <div id="sale-item-info-${index}"></div>
+    `;
+    container.appendChild(row);
+  },
+
+  onSaleProductChange(index, prodId) {
+    const prod = (Store.data.productions || []).find(p => p.id === prodId);
+    const infoSpan = document.getElementById(`sale-item-info-${index}`);
+    if (prod && infoSpan) {
+      infoSpan.innerHTML = `<span style="font-size: 11px; color: var(--text-secondary); display: block; margin-top: 2px;">Prodotto: <strong>${prod.recipeName}</strong> | Lotto: <strong>${prod.lot}</strong> | Scadenza: <strong>${this.formatDate(prod.expiry)}</strong></span>`;
+    } else if (infoSpan) {
+      infoSpan.innerHTML = '';
+    }
+  },
+
+  exportDDT(saleId) {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    
+    const sale = (Store.data.sales || []).find(s => s.id === saleId);
+    if (!sale) return;
+    
+    const client = (Store.data.clients || []).find(c => c.id === sale.clientId) || {};
+    const company = Store.data.company || {};
+    
+    doc.setFont("helvetica", "normal");
+    
+    // Top Left: Mittente (Sender)
+    doc.setFontSize(8);
+    doc.setTextColor(80, 80, 80);
+    doc.text("MITTENTE:", 14, 15);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(0, 0, 0);
+    doc.text(company.ragioneSociale || '-', 14, 19);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(80, 80, 80);
+    doc.text(`Sede Legale: ${company.sedeLegale || '-'}`, 14, 23);
+    doc.text(`Sede Operativa: ${company.sedeOperativa || '-'}`, 14, 27);
+    doc.text(`P.IVA/C.F.: ${company.pIva || '-'}`, 14, 31);
+    
+    // Top Right: Destinatario (Recipient)
+    const rightX = doc.internal.pageSize.width - 90;
+    doc.setFontSize(8);
+    doc.setTextColor(80, 80, 80);
+    doc.text("DESTINATARIO:", rightX, 15);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(0, 0, 0);
+    doc.text(client.name || '-', rightX, 19);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(80, 80, 80);
+    doc.text(`Sede Legale: ${client.legalAddress || '-'}`, rightX, 23);
+    doc.text(`Sede Operativa: ${client.officeAddress || '-'}`, rightX, 27);
+    doc.text(`P.IVA: ${client.vat || '-'}`, rightX, 31);
+
+    // Separator line
+    doc.setDrawColor(200, 200, 200);
+    doc.line(14, 35, doc.internal.pageSize.width - 14, 35);
+    
+    // Blocco Dati Documento
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(37, 99, 235);
+    doc.text(`DOCUMENTO DI TRASPORTO (DDT) N. ${sale.ddtNumber}`, 14, 45);
+    
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(0, 0, 0);
+    doc.text(`Data Documento: ${this.formatDate(sale.date)}`, 14, 52);
+    doc.text(`Luogo di Consegna: ${sale.deliveryAddress || '-'}`, 14, 57);
+    
+    // Table
+    const tableData = (sale.items || []).map(item => [
+      item.productName || '-',
+      item.lot || '-',
+      this.formatDate(item.expiry) || '-',
+      item.quantity || '-'
+    ]);
+    
+    doc.autoTable({
+      startY: 65,
+      head: [['Descrizione Prodotto', 'Lotto', 'Scadenza', 'Quantità']],
+      body: tableData.length > 0 ? tableData : [['', '', '', '']],
+      theme: 'grid',
+      headStyles: { fillColor: [37, 99, 235] },
+      styles: { fontSize: 9 }
+    });
+    
+    // Piè di pagina: Signature lines
+    let finalY = doc.lastAutoTable.finalY + 25;
+    if (finalY > doc.internal.pageSize.height - 40) {
+      doc.addPage();
+      finalY = 30;
+    }
+    
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "bold");
+    doc.text("Firma del Trasportatore", 30, finalY);
+    doc.line(14, finalY + 12, 80, finalY + 12);
+    
+    doc.text("Firma del Cliente", doc.internal.pageSize.width - 80, finalY);
+    doc.line(doc.internal.pageSize.width - 80, finalY + 12, doc.internal.pageSize.width - 14, finalY + 12);
+    
+    doc.save(`ddt_${sale.ddtNumber}.pdf`);
   }
 };
 
