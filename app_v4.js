@@ -237,6 +237,10 @@ const App = {
         main.innerHTML = this.views.traceability();
         this.bindTraceabilityEvents();
         break;
+      case 'trace_archivio_menu':
+        title.innerText = 'Archivio Centrale';
+        main.innerHTML = this.views.trace_archivio_menu();
+        break;
       case 'labels':
         title.innerText = 'Etichettatura';
         main.innerHTML = this.views.labels();
@@ -367,6 +371,14 @@ const App = {
       case 'trace_archive':
         title.innerText = 'Archivio Documenti';
         main.innerHTML = this.views.trace_archive();
+        break;
+      case 'trace_storico':
+        title.innerText = 'Archivio Storico';
+        main.innerHTML = this.views.trace_storico();
+        break;
+      case 'trace_light_ddt':
+        title.innerText = 'Storico DDT Leggero';
+        main.innerHTML = this.views.trace_light_ddt();
         break;
       case 'trace_scan':
         title.innerText = 'Scanner QR';
@@ -774,6 +786,84 @@ const App = {
     }
   },
 
+  async executeAdvancedCleanup(modules, months) {
+    const cutoffDate = new Date();
+    cutoffDate.setMonth(cutoffDate.getMonth() - months);
+    
+    let purgedCount = 0;
+    let movedSalesCount = 0;
+    let movedIncomingCount = 0;
+    
+    for (const tableName of modules) {
+      const records = Store.data[tableName] || [];
+      let tableChanged = false;
+      let recordsToKeep = [];
+      
+      for (const record of records) {
+        const recordDate = new Date(record.date || record.createdAt);
+        if (recordDate < cutoffDate) {
+          // Delete media from indexedDB
+          const mediaFields = ['ddtPhoto', 'labelPhoto', 'mapPhoto', 'photo', 'signature'];
+          for (const field of mediaFields) {
+            if (record[field] && typeof record[field] === 'string' && record[field].startsWith('idb://')) {
+              if (typeof MediaStore !== 'undefined' && MediaStore.remove) {
+                await MediaStore.remove(record[field]).catch(() => {});
+              }
+              record[field] = null;
+              tableChanged = true;
+              purgedCount++;
+            }
+          }
+          if (record.photos && Array.isArray(record.photos)) {
+            for (let i = 0; i < record.photos.length; i++) {
+              if (record.photos[i] && typeof record.photos[i] === 'string' && record.photos[i].startsWith('idb://')) {
+                if (typeof MediaStore !== 'undefined' && MediaStore.remove) {
+                  await MediaStore.remove(record.photos[i]).catch(() => {});
+                }
+                record.photos[i] = null;
+                tableChanged = true;
+                purgedCount++;
+              }
+            }
+            record.photos = record.photos.filter(p => p !== null);
+          }
+          
+          // Move to light history if it's sales or incoming
+          if (tableName === 'sales' || tableName === 'incoming_goods') {
+            const lightRecord = JSON.parse(JSON.stringify(record));
+            lightRecord.type = tableName === 'sales' ? 'sale' : 'incoming';
+            lightRecord.movedAt = new Date().toISOString();
+            if (!Store.data.light_ddt_history) Store.data.light_ddt_history = [];
+            Store.data.light_ddt_history.push(lightRecord);
+            
+            if (tableName === 'sales') movedSalesCount++;
+            if (tableName === 'incoming_goods') movedIncomingCount++;
+            
+            tableChanged = true;
+          } else {
+            recordsToKeep.push(record);
+          }
+        } else {
+          recordsToKeep.push(record);
+        }
+      }
+      
+      if (tableChanged) {
+        Store.data[tableName] = recordsToKeep;
+        Store.save();
+      }
+    }
+    
+    if (typeof MediaStore !== 'undefined' && MediaStore.garbageCollect) {
+       await MediaStore.garbageCollect().catch(() => {});
+    }
+    
+    let msg = `Pulizia completata!\n- Foto rimosse: ${purgedCount}\n`;
+    if (movedSalesCount > 0) msg += `- Vendite archiviate nello Storico Leggero: ${movedSalesCount}\n`;
+    if (movedIncomingCount > 0) msg += `- Carichi archiviati nello Storico Leggero: ${movedIncomingCount}`;
+    alert(msg);
+  },
+
   async purgeOldShipments() {
     const shipments = Store.data.trace_shipments || [];
     const now = new Date();
@@ -864,6 +954,31 @@ const App = {
     }
   },
 
+  addProductionLotRow(btn) {
+    const container = btn.previousElementSibling; // lot-rows-container
+    const block = btn.closest('.prod-ing-block');
+    const availableLotsJSON = block.dataset.availableLots;
+    if (!availableLotsJSON) return;
+    const availableLots = JSON.parse(decodeURIComponent(availableLotsJSON));
+    
+    const div = document.createElement('div');
+    div.className = 'lot-row';
+    div.style.cssText = 'display: flex; gap: 8px; margin-bottom: 8px; align-items: flex-start;';
+    div.innerHTML = `
+      <div style="flex: 1;">
+        <select class="prod-lot-select" style="font-size: 12px; padding: 5px;" onchange="this.closest('.prod-ing-block').querySelector('.ing-title-btn').onclick = () => App.goToIncomingDetail(this.value)">
+          <option value="">-- Scegli Lotto --</option>
+          ${availableLots.map(l => `<option value="${l.id}">Lotto Int: ${l.lotInterno || 'N/D'} - Scad: ${App.formatDate(l.expiry)} (Giac: ${l.availableQty.toFixed(2)})</option>`).join('')}
+        </select>
+      </div>
+      <div style="width: 80px;">
+        <input type="number" class="prod-lot-qty" value="" step="0.001" style="font-size: 12px; padding: 5px; width: 100%;" placeholder="Q.tà" />
+      </div>
+      <button class="btn-danger" style="width: 30px; height: 30px; padding: 0; display: flex; align-items: center; justify-content: center;" onclick="this.closest('.lot-row').remove()"><i class="ph ph-trash"></i></button>
+    `;
+    container.appendChild(div);
+  },
+
   updateProductionIngredients(isEdit = false, savedIngredients = null) {
     const suffix = isEdit ? '-edit' : '';
     const recipeId = document.getElementById(isEdit ? 'edit-prod-recipe-id' : 'prod-recipe-id').value;
@@ -901,32 +1016,68 @@ const App = {
         .sort((a,b) => new Date(a.expiry) - new Date(b.expiry));
       
       // FIFO: pre-seleziona la scadenza più ravvicinata se nuovo, o quello salvato se edit
-      let selectedLotId = '';
+      // FIFO auto-split logic
+      const assignedLots = [];
+      let remaining = parseFloat(needed);
+      
       if (savedIngredients) {
-        const saved = savedIngredients.find(si => si.ingredientId === ri.ingredientId);
-        selectedLotId = saved ? saved.incomingId : '';
-      }
-      if (!selectedLotId && availableLots.length > 0) {
-        selectedLotId = availableLots[0].id;
+        const saved = savedIngredients.filter(si => si.ingredientId === ri.ingredientId);
+        if (saved.length > 0) {
+           saved.forEach(s => {
+             assignedLots.push({ lotId: s.incomingId, qty: parseFloat(s.quantity) });
+           });
+           remaining = 0;
+        }
       }
 
+      if (assignedLots.length === 0) {
+        for (const lot of availableLots) {
+          if (remaining <= 0) break;
+          const toTake = Math.min(lot.availableQty, remaining);
+          assignedLots.push({ lotId: lot.id, qty: toTake });
+          remaining -= toTake;
+        }
+        if (remaining > 0 && assignedLots.length === 0) {
+          assignedLots.push({ lotId: '', qty: remaining });
+        }
+      }
+
+      const availableLotsJSON = encodeURIComponent(JSON.stringify(availableLots));
+
+      const rowsHTML = assignedLots.map((al, idx) => `
+        <div class="lot-row" style="display: flex; gap: 8px; margin-bottom: 8px; align-items: flex-start;">
+          <div style="flex: 1;">
+            <select class="prod-lot-select" style="font-size: 12px; padding: 5px;" onchange="this.closest('.prod-ing-block').querySelector('.ing-title-btn').onclick = () => App.goToIncomingDetail(this.value)">
+              <option value="">-- Scegli Lotto --</option>
+              ${availableLots.map(l => `<option value="${l.id}" ${l.id === al.lotId ? 'selected' : ''}>Lotto Int: ${l.lotInterno || 'N/D'} - Scad: ${App.formatDate(l.expiry)} (Giac: ${l.availableQty.toFixed(2)})</option>`).join('')}
+            </select>
+          </div>
+          <div style="width: 80px;">
+            <input type="number" class="prod-lot-qty" value="${al.qty.toFixed(3)}" step="0.001" style="font-size: 12px; padding: 5px; width: 100%;" placeholder="Q.tà" />
+          </div>
+          ${idx > 0 ? `<button class="btn-danger" style="width: 30px; height: 30px; padding: 0; display: flex; align-items: center; justify-content: center;" onclick="this.closest('.lot-row').remove()"><i class="ph ph-trash"></i></button>` : `<div style="width: 30px;"></div>`}
+        </div>
+      `).join('');
+
       return `
-        <div class="prod-ing-block" data-ing-id="${ri.ingredientId}" data-ing-name="${ing ? ing.name : '?'}" data-needed-qty="${needed}" style="background: white; padding: 12px; border-radius: 10px; border: 1px solid var(--border-color);">
+        <div class="prod-ing-block" data-ing-id="${ri.ingredientId}" data-ing-name="${ing ? ing.name : '?'}" data-needed-qty="${needed}" data-available-lots="${availableLotsJSON}" style="background: white; padding: 12px; border-radius: 10px; border: 1px solid var(--border-color);">
           <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
-            <div style="cursor: pointer; color: var(--primary-color); font-weight: 600;" onclick="App.goToIncomingDetail('${selectedLotId}')">
+            <div class="ing-title-btn" style="cursor: pointer; color: var(--primary-color); font-weight: 600;" onclick="App.goToIncomingDetail('${assignedLots[0]?.lotId || ''}')">
               ${ing ? ing.name : 'Ingrediente sconosciuto'}
               ${ing && (ing.allergenPresent === true || ing.allergen === true || (ing.allergens && ing.allergens.length > 0)) ? `<br><span style="font-size: 10px; color: var(--danger-color); font-weight: 600;">⚠️ Contiene Allergeni</span>` : ''}
-              <div style="font-size: 10px; color: var(--text-secondary); margin-top: 2px;">(Clicca per foto Lotto/DDT)</div>
+              <div style="font-size: 10px; color: var(--text-secondary); margin-top: 2px;">(Clicca per foto Lotto)</div>
             </div>
-            <div style="font-weight: 700; font-size: 13px;">${needed} ${ing ? ing.unit : ''}</div>
+            <div style="font-weight: 700; font-size: 13px; text-align: right;">Fabbisogno:<br>${needed} ${ing ? ing.unit : ''}</div>
           </div>
           
           <div class="form-group" style="margin-bottom: 0;">
-            <label style="font-size: 10px; margin-bottom: 4px;">Lotto Utilizzato (FIFO per scadenza):</label>
-            <select class="prod-lot-select" style="font-size: 12px; padding: 5px;" onchange="this.closest('.prod-ing-block').querySelector('[onclick]').onclick = () => App.goToIncomingDetail(this.value)">
-              <option value="">-- Scegli Lotto --</option>
-              ${availableLots.map(l => `<option value="${l.id}" ${l.id === selectedLotId ? 'selected' : ''}>Lotto Int: ${l.lotInterno || 'N/D'} - Scad: ${App.formatDate(l.expiry)} (Giacenza: ${l.availableQty.toFixed(2)})</option>`).join('')}
-            </select>
+            <label style="font-size: 10px; margin-bottom: 4px;">Prelievo Multi-Lotto (Auto-Split FIFO):</label>
+            <div class="lot-rows-container">
+              ${rowsHTML}
+            </div>
+            <button class="btn-secondary" style="font-size: 11px; padding: 4px 8px; width: auto; margin-top: 5px;" onclick="App.addProductionLotRow(this)">
+              <i class="ph ph-plus"></i> Aggiungi Lotto
+            </button>
           </div>
         </div>
       `;
@@ -1125,17 +1276,23 @@ const App = {
             };
         });
 
-        // find productions
-        const expiringProds = (Store.data.productions || []).filter(p => p.expiry && new Date(p.expiry) <= nextWeek).map(p => {
+        // find productions (only active)
+        const expiringProds = (Store.data.productions || []).filter(p => {
+            if (!p.expiry) return false;
+            if (new Date(p.expiry) > nextWeek) return false;
+            const stockInfo = App.getProductionStock(p.id);
+            return stockInfo.stock > 0;
+        }).map(p => {
             const expDate = new Date(p.expiry);
             expDate.setHours(0,0,0,0);
+            const stockInfo = App.getProductionStock(p.id);
             return {
                id: p.id,
                name: `Prod: ${p.recipeName}`,
                date: p.expiry,
                type: 'OUT',
                isExpired: expDate < now,
-               qty: parseFloat(p.quantityProduced) || 0,
+               qty: stockInfo.stock,
                unit: 'Pz/Kg'
             };
         });
@@ -2118,6 +2275,32 @@ const App = {
              <button class="btn-secondary" onclick="App.exportTraceabilityPDF('recipes')"><i class="ph ph-book-bookmark"></i> Ricettario</button>
              <button class="btn-secondary" onclick="App.exportTraceabilityPDF('suppliers')"><i class="ph ph-address-book"></i> Fornitori</button>
              <button class="btn-secondary" onclick="App.exportTraceabilityPDF('production')"><i class="ph ph-cooking-pot"></i> Produzione</button>
+             <button class="btn-secondary" onclick="App.exportTraceabilityPDF('clients')"><i class="ph ph-users"></i> Clienti</button>
+             <button class="btn-secondary" onclick="App.exportTraceabilityPDF('sales')"><i class="ph ph-shopping-cart"></i> Registro Vendite</button>
+          </div>
+        </div>
+      `;
+    },
+
+    trace_archivio_menu() {
+      return `
+        <div class="card">
+          <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
+          <h3><i class="ph-fill ph-archive-box"></i> Archivio Centrale</h3>
+          <p style="margin-bottom: 20px; font-size: 12px; color: var(--text-secondary);">Tutta la cronologia passata e i documenti esauriti o alleggeriti.</p>
+          <div class="dashboard-grid">
+            <div class="widget" onclick="App.renderView('trace_archive')" style="cursor: pointer; padding: 15px;">
+              <div class="widget-icon bg-red" style="width: 40px; height: 40px; font-size: 20px;"><i class="ph-fill ph-folder-open"></i></div>
+              <div class="widget-value" style="font-size: 16px; margin-top: 5px;">Archivio DDT in ingresso</div>
+            </div>
+            <div class="widget" onclick="App.renderView('trace_light_ddt')" style="cursor: pointer; padding: 15px;">
+              <div class="widget-icon" style="background: var(--primary-color); width: 40px; height: 40px; font-size: 20px; color: white;"><i class="ph-fill ph-files"></i></div>
+              <div class="widget-value" style="font-size: 16px; margin-top: 5px;">Storico DDT in uscita</div>
+            </div>
+            <div class="widget" onclick="App.renderView('trace_storico')" style="cursor: pointer; padding: 15px;">
+              <div class="widget-icon" style="background: var(--text-secondary); width: 40px; height: 40px; font-size: 20px; color: white;"><i class="ph-fill ph-archive"></i></div>
+              <div class="widget-value" style="font-size: 16px; margin-top: 5px;">Archivio ingredienti e produzioni</div>
+            </div>
           </div>
         </div>
       `;
@@ -2154,9 +2337,9 @@ const App = {
             <div class="widget-icon bg-green" style="width: 40px; height: 40px; font-size: 20px;"><i class="ph-fill ph-shopping-cart"></i></div>
             <div class="widget-value" style="font-size: 16px; margin-top: 5px;">Vendite (DDT)</div>
           </div>
-          <div class="widget" onclick="App.renderView('trace_archive')" style="cursor: pointer; padding: 15px;">
-            <div class="widget-icon bg-red" style="width: 40px; height: 40px; font-size: 20px;"><i class="ph-fill ph-folder-open"></i></div>
-            <div class="widget-value" style="font-size: 16px; margin-top: 5px;">Archivio DDT</div>
+          <div class="widget" onclick="App.renderView('trace_archivio_menu')" style="cursor: pointer; padding: 15px;">
+            <div class="widget-icon" style="background: #475569; width: 40px; height: 40px; font-size: 20px; color: white;"><i class="ph-fill ph-archive-box"></i></div>
+            <div class="widget-value" style="font-size: 16px; margin-top: 5px;">Archivio</div>
           </div>
           <div class="widget" onclick="App.renderView('labels')" style="cursor: pointer; padding: 15px;">
             <div class="widget-icon" style="background: #a855f7; width: 40px; height: 40px; font-size: 20px;"><i class="ph-fill ph-tag"></i></div>
@@ -2182,8 +2365,10 @@ const App = {
           <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
           <h3><i class="ph-fill ph-book-bookmark"></i> Ricettario</h3>
           <p>Gestione database ricette.</p>
-          <div style="margin-top: 16px; margin-bottom: 20px;">
+          <div style="margin-top: 16px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 10px;">
             <button class="btn-primary" onclick="App.openModal('recipe')"><i class="ph ph-plus"></i> Nuova Ricetta</button>
+            <button class="btn-secondary" onclick="App.downloadExcelTemplate('recipes')"><i class="ph ph-download-simple"></i> Scarica Modello</button>
+            <button class="btn-secondary" style="color: #047857; border-color: #047857;" onclick="App.triggerExcelImport('recipes')"><i class="ph ph-upload-simple"></i> Importa da Excel</button>
           </div>
           <div class="list-container">
             ${recipes.length > 0 ? recipes.map(r => `
@@ -2275,12 +2460,23 @@ const App = {
 
     trace_incoming() {
       const goods = Store.data.incoming_goods || [];
-      const filtered = goods.sort((a,b) => new Date(b.date) - new Date(a.date));
+      const productions = Store.data.productions || [];
+      
+      const filtered = goods.filter(g => {
+        const used = productions.reduce((acc, p) => {
+          const ingUsed = (p.ingredients || []).find(i => i.incomingId === g.id);
+          return acc + (ingUsed ? parseFloat(ingUsed.quantity) : 0);
+        }, 0);
+        const adjustments = (g.adjustments || []).reduce((acc, a) => acc + (parseFloat(a.quantity) || 0), 0);
+        const availableQty = parseFloat(g.quantity) - used - adjustments;
+        return availableQty > 0;
+      }).sort((a,b) => new Date(b.date) - new Date(a.date));
 
       return `
         <div class="card">
           <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
           <h3><i class="ph-fill ph-truck"></i> Registro Carichi Merci</h3>
+          <p style="margin-bottom: 10px; font-size: 12px; color: var(--text-secondary);">Mostra solo i carichi attivi (con giacenza > 0). I lotti terminati si trovano nell'Archivio Storico.</p>
           <div style="margin-top: 16px; margin-bottom: 20px;">
             <button class="btn-primary" onclick="App.openModal('incoming')"><i class="ph ph-plus"></i> Nuovo Carico</button>
           </div>
@@ -2375,6 +2571,15 @@ const App = {
               <span style="background: ${daysToExpiry <= 7 ? 'rgba(231,76,60,0.1)' : 'rgba(0,0,0,0.06)'}; color: ${expiryColor}; padding: 3px 12px; border-radius: 20px; font-size: 11px; font-weight: 600;">
                 <i class="ph ph-timer"></i> Scad: ${expiryDate.toLocaleDateString()} ${expiryLabel ? '(' + expiryLabel + ')' : ''}
               </span>
+              ${(() => {
+                const ingData = (Store.data.ingredients || []).find(i => i.id === g.ingredientId);
+                if (ingData && (ingData.allergenPresent === true || ingData.allergen === true || (ingData.allergens && ingData.allergens.length > 0))) {
+                  return `<span style="background: #fee2e2; color: #991b1b; padding: 3px 12px; border-radius: 20px; font-size: 11px; font-weight: 700; border: 1px solid #fecaca;">
+                    ⚠️ Contiene: ${(ingData.allergens && ingData.allergens.length > 0) ? ingData.allergens.join(', ') : 'Allergene'}
+                  </span>`;
+                }
+                return '';
+              })()}
             </div>
           </div>
 
@@ -2585,8 +2790,10 @@ const App = {
           <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
           <h3><i class="ph-fill ph-address-book"></i> Elenco Fornitori</h3>
           <p>Anagrafica completa dei fornitori di materie prime.</p>
-          <div style="margin-top: 16px; margin-bottom: 20px;">
+          <div style="margin-top: 16px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 10px;">
             <button class="btn-primary" onclick="App.openModal('supplier')"><i class="ph ph-plus"></i> Nuovo Fornitore</button>
+            <button class="btn-secondary" onclick="App.downloadExcelTemplate('suppliers')"><i class="ph ph-download-simple"></i> Scarica Modello</button>
+            <button class="btn-secondary" style="color: #047857; border-color: #047857;" onclick="App.triggerExcelImport('suppliers')"><i class="ph ph-upload-simple"></i> Importa da Excel</button>
           </div>
           <div class="list-container">
             ${suppliers.map(s => `
@@ -2667,8 +2874,10 @@ const App = {
           <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
           <h3><i class="ph-fill ph-users"></i> Elenco Clienti</h3>
           <p>Anagrafica completa dei clienti.</p>
-          <div style="margin-top: 16px; margin-bottom: 20px;">
+          <div style="margin-top: 16px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 10px;">
             <button class="btn-primary" onclick="App.openModal('client')"><i class="ph ph-plus"></i> Nuovo Cliente</button>
+            <button class="btn-secondary" onclick="App.downloadExcelTemplate('clients')"><i class="ph ph-download-simple"></i> Scarica Modello</button>
+            <button class="btn-secondary" style="color: #047857; border-color: #047857;" onclick="App.triggerExcelImport('clients')"><i class="ph ph-upload-simple"></i> Importa da Excel</button>
           </div>
           <div class="list-container">
             ${clients.map(c => `
@@ -2816,8 +3025,10 @@ const App = {
           <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
           <h3><i class="ph-fill ph-list-bullets"></i> Ingredienti Generici</h3>
           <p>Database centrale delle materie prime potenzialmente utilizzabili.</p>
-          <div style="margin-top: 16px; margin-bottom: 20px;">
+          <div style="margin-top: 16px; margin-bottom: 20px; display: flex; flex-wrap: wrap; gap: 10px;">
             <button class="btn-primary" onclick="App.openModal('ingredient')"><i class="ph ph-plus"></i> Nuovo Ingrediente</button>
+            <button class="btn-secondary" onclick="App.downloadExcelTemplate('ingredients')"><i class="ph ph-download-simple"></i> Scarica Modello</button>
+            <button class="btn-secondary" style="color: #047857; border-color: #047857;" onclick="App.triggerExcelImport('ingredients')"><i class="ph ph-upload-simple"></i> Importa da Excel</button>
           </div>
           <div class="list-container">
             ${ingredients.length > 0 ? ingredients.map(ing => {
@@ -2895,30 +3106,34 @@ const App = {
 
     trace_production() {
       const productions = Store.data.productions || [];
-      const filtered = productions.sort((a,b) => new Date(b.date) - new Date(a.date));
+      const filtered = productions
+        .map(p => ({ ...p, stockInfo: App.getProductionStock(p.id) }))
+        .filter(p => p.stockInfo.stock > 0)
+        .sort((a,b) => new Date(b.date) - new Date(a.date));
       return `
         <div class="card">
           <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
           <h3><i class="ph-fill ph-cooking-pot"></i> Registro Produzione</h3>
+          <p style="margin-bottom: 10px; font-size: 12px; color: var(--text-secondary);">Mostra solo i lotti attivi (con giacenza > 0). I lotti esauriti si trovano nell'Archivio Storico.</p>
           <div style="margin-top: 16px; margin-bottom: 20px;">
             <button class="btn-primary" onclick="App.openModal('production')"><i class="ph ph-plus"></i> Nuova Produzione</button>
           </div>
           <div class="list-container">
             ${filtered.length > 0 ? filtered.map(p => `
-              <div class="list-item" style="cursor: pointer;" onclick="App.goToProductionDetail('${p.id}')">
+              <div class="list-item" style="cursor: pointer; border-left: 4px solid var(--success-color);" onclick="App.goToProductionDetail('${p.id}')">
                 <div style="flex: 1;">
                   <div class="item-title">${p.recipeName}</div>
                   <div class="item-subtitle">Lotto: ${p.lot} | Data: ${App.formatDate(p.date)}</div>
                 </div>
                 <div style="display: flex; gap: 15px; align-items: center;">
-                  <span style="font-size: 12px; font-weight: 600; background: var(--bg-body); padding: 4px 8px; border-radius: 6px;">${p.quantityProduced} kg/pz</span>
+                  <span style="font-size: 12px; font-weight: 600; background: rgba(16,185,129,0.1); color: var(--success-color); padding: 4px 8px; border-radius: 6px;">Giac. ${p.stockInfo.stock.toFixed(2)} kg/pz</span>
                   <div style="display: flex; gap: 8px;">
                     <i class="ph ph-pencil" style="color: var(--primary-color);" onclick="event.stopPropagation(); App.openModal('edit-production', '${p.id}')"></i>
                     <i class="ph ph-trash" style="color: var(--danger-color);" onclick="event.stopPropagation(); App.removeItem('productions', '${p.id}', 'trace_production')"></i>
                   </div>
                 </div>
               </div>
-            `).join('') : '<p style="text-align: center; color: var(--text-secondary);">Nessuna produzione registrata.</p>'}
+            `).join('') : '<p style="text-align: center; color: var(--text-secondary);">Nessuna produzione in giacenza.</p>'}
           </div>
         </div>
       `;
@@ -2927,6 +3142,14 @@ const App = {
     trace_production_detail(id) {
       const p = (Store.data.productions || []).find(x => x.id === id);
       if(!p) return `<div class="card"><p>Produzione non trovata.</p></div>`;
+
+      const stockInfo = App.getProductionStock(p.id);
+      let statusColor = stockInfo.stock > 0 ? 'var(--success-color)' : 'var(--text-secondary)';
+      let statusText = stockInfo.stock > 0 ? 'In giacenza' : 'Esaurito/Venduto';
+      if (p.expiry && new Date(p.expiry) < new Date() && stockInfo.stock > 0) {
+        statusColor = 'var(--danger-color)';
+        statusText = 'Scaduto (Giacenza Residua)';
+      }
 
       return `
         <div class="card">
@@ -2938,14 +3161,40 @@ const App = {
             </div>
           </div>
           
-          <div style="background: var(--bg-body); padding: 20px; border-radius: 12px; margin-bottom: 24px; border: 1px solid var(--border-color);">
-            <div style="font-size: 11px; text-transform: uppercase; color: var(--primary-color); font-weight: 700; margin-bottom: 5px;">Scheda Produzione</div>
+          <div style="background: var(--bg-body); padding: 20px; border-radius: 12px; margin-bottom: 15px; border: 1px solid var(--border-color); border-left: 4px solid ${statusColor};">
+            <div style="font-size: 11px; text-transform: uppercase; color: ${statusColor}; font-weight: 700; margin-bottom: 5px;">${statusText}</div>
             <h2 style="margin-bottom: 10px;">${p.recipeName}</h2>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; font-size: 13px;">
               <div><strong>Lotto Interno:</strong><br>${p.lot}</div>
               <div><strong>Data Prod:</strong><br>${App.formatDate(p.date)}</div>
-              <div><strong>Quantità:</strong><br>${p.quantityProduced} kg/pz</div>
               <div><strong>Scadenza:</strong><br>${App.formatDate(p.expiry)}</div>
+            </div>
+          </div>
+          
+          <div style="background: white; padding: 20px; border-radius: 12px; margin-bottom: 24px; border: 1px solid var(--border-color);">
+            <h4 style="margin-bottom: 15px;"><i class="ph ph-scales"></i> Bilancio di Massa</h4>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px;">
+              <div style="background: rgba(0,0,0,0.02); padding: 10px; border-radius: 8px;">
+                <div style="font-size: 11px; color: var(--text-secondary); text-transform: uppercase;">Prodotta (Iniziale)</div>
+                <div style="font-size: 16px; font-weight: 700; color: var(--text-primary);">${stockInfo.produced.toFixed(2)} kg/pz</div>
+              </div>
+              <div style="background: rgba(0,0,0,0.02); padding: 10px; border-radius: 8px;">
+                <div style="font-size: 11px; color: var(--text-secondary); text-transform: uppercase;">Venduta a Clienti</div>
+                <div style="font-size: 16px; font-weight: 700; color: var(--text-primary);">${stockInfo.sold.toFixed(2)} kg/pz</div>
+              </div>
+            </div>
+            
+            <div style="display: flex; gap: 10px; align-items: flex-end; margin-bottom: 15px; background: rgba(0,0,0,0.02); padding: 10px; border-radius: 8px;">
+              <div style="flex: 1;">
+                <div style="font-size: 11px; color: var(--text-secondary); text-transform: uppercase;">Somministrata in loco</div>
+                <input type="number" id="prod-admin-qty-${p.id}" value="${stockInfo.administered}" step="any" min="0" style="width: 100%; font-size: 14px; padding: 6px; margin-top: 5px; border: 1px solid var(--border-color); border-radius: 6px;" />
+              </div>
+              <button class="btn-primary" style="padding: 6px 12px; width: auto;" onclick="App.updateAdministeredQty('${p.id}', document.getElementById('prod-admin-qty-${p.id}').value)">Aggiorna</button>
+            </div>
+            
+            <div style="background: ${stockInfo.stock > 0 ? 'rgba(16,185,129,0.1)' : 'rgba(0,0,0,0.05)'}; padding: 12px; border-radius: 8px; border: 1px solid ${stockInfo.stock > 0 ? 'var(--success-color)' : 'var(--border-color)'}; text-align: center;">
+              <div style="font-size: 12px; color: ${stockInfo.stock > 0 ? 'var(--success-color)' : 'var(--text-secondary)'}; text-transform: uppercase; font-weight: 700; margin-bottom: 5px;">Giacenza Attuale Reale</div>
+              <div style="font-size: 22px; font-weight: 800; color: ${stockInfo.stock > 0 ? 'var(--success-color)' : 'var(--text-primary)'};">${stockInfo.stock.toFixed(2)} kg/pz</div>
             </div>
           </div>
 
@@ -2958,7 +3207,10 @@ const App = {
               return `
                 <div class="list-item" style="padding: 12px 0; cursor: pointer;" onclick="App.goToIncomingDetail('${ing.incomingId}')">
                   <div style="flex: 1;">
-                    <div style="font-weight: 600; font-size: 14px; color: var(--primary-color);">${ingData ? ingData.name : 'Ingrediente'}</div>
+                    <div style="font-weight: 600; font-size: 14px; color: var(--primary-color);">
+                      ${ingData ? ingData.name : 'Ingrediente'}
+                      ${ingData && (ingData.allergenPresent === true || ingData.allergen === true || (ingData.allergens && ingData.allergens.length > 0)) ? `<span style="margin-left: 6px; background: #fee2e2; color: #991b1b; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; border: 1px solid #fecaca; display: inline-block; vertical-align: middle;">⚠️ ${(ingData.allergens && ingData.allergens.length > 0) ? ingData.allergens.join(', ') : 'Allergene'}</span>` : ''}
+                    </div>
                     <div style="font-size: 11px; color: var(--text-secondary);">
                       Lotto Int: ${lotData ? (lotData.lotInterno || 'N/D') : 'N/D'} | 
                       Scad: ${lotData ? App.formatDate(lotData.expiry) : 'N/D'}
@@ -3113,7 +3365,7 @@ const App = {
         <div class="card">
           <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-            <h3><i class="ph-fill ph-folder-open"></i> Archivio DDT</h3>
+            <h3><i class="ph-fill ph-folder-open"></i> Archivio DDT in ingresso</h3>
             <button class="btn-primary" style="width: auto; padding: 6px 12px; font-size: 12px;" onclick="App.openModal('incoming')">
               <i class="ph ph-plus"></i> Nuovo Carico
             </button>
@@ -3140,6 +3392,152 @@ const App = {
 
           <div class="list-container">
             ${oldShipments.length > 0 ? oldShipments.map(s => renderShipment(s, true)).join('') : '<p style="text-align: center; color: var(--text-secondary); padding: 20px 0;">Nessun DDT vecchio.</p>'}
+          </div>
+        </div>
+      `;
+    },
+
+    trace_storico() {
+      const productions = Store.data.productions || [];
+      const goods = Store.data.incoming_goods || [];
+      
+      const archivedProds = productions
+        .map(p => ({ ...p, stockInfo: App.getProductionStock(p.id) }))
+        .filter(p => p.stockInfo.stock <= 0)
+        .sort((a,b) => new Date(b.date) - new Date(a.date));
+        
+      const archivedGoods = goods.filter(g => {
+        const used = productions.reduce((acc, p) => {
+          const ingUsed = (p.ingredients || []).find(i => i.incomingId === g.id);
+          return acc + (ingUsed ? parseFloat(ingUsed.quantity) : 0);
+        }, 0);
+        const adjustments = (g.adjustments || []).reduce((acc, a) => acc + (parseFloat(a.quantity) || 0), 0);
+        const availableQty = parseFloat(g.quantity) - used - adjustments;
+        return availableQty <= 0;
+      }).sort((a,b) => new Date(b.date) - new Date(a.date));
+
+      return `
+        <div class="card">
+          <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
+          <h3 style="color: var(--text-secondary);"><i class="ph-fill ph-archive"></i> Archivio ingredienti e produzioni</h3>
+          <p style="margin-bottom: 20px; font-size: 12px; color: var(--text-secondary);">Elenco delle produzioni esaurite e dei lotti ingredienti terminati. I dati vengono archiviati in automatico quando la giacenza raggiunge zero.</p>
+          
+          <h4 style="margin-top: 10px; margin-bottom: 10px; color: var(--text-secondary); border-bottom: 2px solid var(--border-color); padding-bottom: 5px;"><i class="ph-fill ph-cooking-pot"></i> Produzioni Esaurite <span style="font-size: 11px; font-weight: 400;">(${archivedProds.length})</span></h4>
+          <div class="list-container" style="margin-bottom: 30px;">
+            ${archivedProds.length > 0 ? archivedProds.map(p => `
+              <div class="list-item" style="cursor: pointer; opacity: 0.8;" onclick="App.goToProductionDetail('${p.id}')">
+                <div style="flex: 1;">
+                  <div class="item-title">${p.recipeName}</div>
+                  <div class="item-subtitle">Lotto: ${p.lot} | Data: ${App.formatDate(p.date)}</div>
+                </div>
+                <div style="display: flex; gap: 15px; align-items: center;">
+                  <span style="font-size: 12px; font-weight: 600; background: rgba(0,0,0,0.05); color: var(--text-secondary); padding: 4px 8px; border-radius: 6px;">Esaurito</span>
+                  <i class="ph ph-caret-right" style="color: var(--text-secondary);"></i>
+                </div>
+              </div>
+            `).join('') : '<p style="text-align: center; color: var(--text-secondary); padding: 10px 0;">Nessuna produzione esaurita.</p>'}
+          </div>
+
+          <h4 style="margin-bottom: 10px; color: var(--text-secondary); border-bottom: 2px solid var(--border-color); padding-bottom: 5px;"><i class="ph-fill ph-package"></i> Lotti Ingredienti Terminati <span style="font-size: 11px; font-weight: 400;">(${archivedGoods.length})</span></h4>
+          <div class="list-container">
+            ${archivedGoods.length > 0 ? archivedGoods.map(g => `
+              <div class="list-item" style="cursor: pointer; opacity: 0.8;" onclick="App.goToIncomingDetail('${g.id}')">
+                <div style="flex: 1;">
+                  <div class="item-title">${g.ingredientName}</div>
+                  <div class="item-subtitle">Lotto Int: ${g.lotInterno} | Fornitore: ${g.supplierName}</div>
+                </div>
+                <div style="display: flex; gap: 15px; align-items: center;">
+                  <span style="font-size: 12px; font-weight: 600; background: rgba(0,0,0,0.05); color: var(--text-secondary); padding: 4px 8px; border-radius: 6px;">Terminato</span>
+                  <i class="ph ph-caret-right" style="color: var(--text-secondary);"></i>
+                </div>
+              </div>
+            `).join('') : '<p style="text-align: center; color: var(--text-secondary); padding: 10px 0;">Nessun lotto terminato.</p>'}
+          </div>
+        </div>
+      `;
+    },
+
+    trace_light_ddt() {
+      const history = Store.data.light_ddt_history || [];
+      const clients = Store.data.clients || [];
+      
+      // Estrai lista clienti unici dalla history vendite
+      const historyClientIds = [...new Set(history.filter(h => h.type === 'sale').map(h => h.clientId))];
+      const historyClients = historyClientIds.map(id => clients.find(c => c.id === id)).filter(Boolean);
+      
+      const tableRows = history.sort((a,b) => new Date(b.date || b.createdAt) - new Date(a.date || a.createdAt)).map(h => {
+        let title = '';
+        let subtitle = '';
+        let badge = '';
+        if (h.type === 'sale') {
+           const c = clients.find(cl => cl.id === h.clientId) || {};
+           title = `DDT Vendita N. ${h.ddtNumber || 'N/D'}`;
+           subtitle = `Cliente: ${c.name || 'Sconosciuto'}`;
+           if (h.items && h.items.length > 0) {
+             subtitle += ` | Prodotti: ${h.items.map(i => i.productName + ' (Lot: ' + i.lot + ')').join(', ')}`;
+           }
+           badge = `<span style="font-size: 10px; font-weight: 700; background: rgba(59,130,246,0.1); color: var(--primary-color); padding: 3px 6px; border-radius: 4px;">USCITA</span>`;
+        } else {
+           title = `DDT Ingresso: ${h.ingredientName || 'Sconosciuto'}`;
+           subtitle = `Fornitore: ${h.supplierName || 'Sconosciuto'} | Lotto Int: ${h.lotInterno || '-'} | Q.tà: ${h.quantity || 0} ${h.unit || ''}`;
+           badge = `<span style="font-size: 10px; font-weight: 700; background: rgba(16,185,129,0.1); color: var(--success-color); padding: 3px 6px; border-radius: 4px;">INGRESSO</span>`;
+        }
+        
+        // Costruiamo dataset per il filtro
+        const searchData = (title + ' ' + subtitle).toLowerCase();
+        const itemClientId = h.type === 'sale' ? h.clientId : '';
+        const itemDateStr = h.date || h.createdAt;
+        const itemDate = itemDateStr ? itemDateStr.split('T')[0] : '';
+        
+        return `
+          <div class="list-item light-ddt-item" data-search="${searchData.replace(/"/g, '&quot;')}" data-client="${itemClientId}" data-date="${itemDate}" style="cursor: default;">
+            <div style="flex: 1;">
+              <div class="item-title" style="display: flex; align-items: center; gap: 8px;">${title} ${badge}</div>
+              <div class="item-subtitle" style="font-size: 12px; line-height: 1.4; margin-top: 4px;">${subtitle}</div>
+              <div style="font-size: 10px; color: var(--text-secondary); margin-top: 5px;"><i class="ph ph-calendar"></i> Data Documento: ${App.formatDate(h.date || h.createdAt)} | <i class="ph ph-archive"></i> Archiviato il: ${App.formatDate(h.movedAt)}</div>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      return `
+        <div class="card">
+          <button class="btn-secondary" style="margin-bottom: 16px; width: auto; padding: 8px 16px;" onclick="App.navigateBack()"><i class="ph ph-arrow-left"></i> Indietro</button>
+          <h3 style="color: var(--primary-color);"><i class="ph-fill ph-files"></i> Storico DDT in uscita</h3>
+          <p style="margin-bottom: 20px; font-size: 12px; color: var(--text-secondary);">Questo modulo contiene i dati puramente testuali dei DDT archiviati tramite la Pulizia Avanzata.</p>
+          
+          <div style="background: rgba(0,0,0,0.02); border: 1px solid var(--border-color); padding: 15px; border-radius: 12px; margin-bottom: 20px;">
+            <h4 style="margin-bottom: 15px; font-size: 13px;"><i class="ph-fill ph-funnel"></i> Ricerca e Filtri</h4>
+            <div style="display: grid; grid-template-columns: 1fr; gap: 12px; margin-bottom: 15px;">
+              <div>
+                <label style="font-size: 11px; font-weight: 700; color: var(--text-secondary); margin-bottom: 4px; display: block;">Cliente (Solo Uscite)</label>
+                <select id="filter-light-client" style="width: 100%; padding: 8px; border-radius: 6px; border: 1px solid var(--border-color); font-size: 13px;">
+                  <option value="">-- Tutti i Clienti --</option>
+                  ${historyClients.map(c => `<option value="${c.id}">${c.name}</option>`).join('')}
+                </select>
+              </div>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                <div>
+                  <label style="font-size: 11px; font-weight: 700; color: var(--text-secondary); margin-bottom: 4px; display: block;">Data Da</label>
+                  <input type="date" id="filter-light-date-from" style="width: 100%; padding: 8px; border-radius: 6px; border: 1px solid var(--border-color); font-size: 13px;" />
+                </div>
+                <div>
+                  <label style="font-size: 11px; font-weight: 700; color: var(--text-secondary); margin-bottom: 4px; display: block;">Data A</label>
+                  <input type="date" id="filter-light-date-to" style="width: 100%; padding: 8px; border-radius: 6px; border: 1px solid var(--border-color); font-size: 13px;" />
+                </div>
+              </div>
+              <div>
+                <label style="font-size: 11px; font-weight: 700; color: var(--text-secondary); margin-bottom: 4px; display: block;">Prodotto / Lotto / Fornitore</label>
+                <input type="text" id="filter-light-text" placeholder="Ricerca libera testuale..." style="width: 100%; padding: 8px; border-radius: 6px; border: 1px solid var(--border-color); font-size: 13px;" />
+              </div>
+            </div>
+            <button class="btn-primary" style="width: 100%; font-size: 13px; padding: 10px;" onclick="App.applyLightDDTFilters()">
+              <i class="ph ph-magnifying-glass"></i> Cerca nei Documenti
+            </button>
+          </div>
+
+          <div class="list-container" id="light-ddt-list">
+            ${tableRows || '<p style="text-align: center; color: var(--text-secondary); padding: 15px;">Nessun documento in archivio leggero.</p>'}
           </div>
         </div>
       `;
@@ -3283,7 +3681,15 @@ const App = {
           
           <div style="display: flex; flex-direction: column; gap: 20px;">
             <div style="background: #fff5f5; padding: 20px; border-radius: 12px; border: 2px solid #feb2b2;">
-              <h4 style="margin-bottom: 8px; color: #c53030;">1. Reset Dati HACCP</h4>
+              <h4 style="margin-bottom: 8px; color: #c53030;">1. Svuota Cache e Vecchi Documenti</h4>
+              <p style="font-size: 13px; color: #742a2a; margin-bottom: 12px;">Cancella le foto (DDT, etichette) più vecchie di 24 mesi per liberare memoria. I dati di testo e lo storico HACCP verranno conservati.</p>
+              <button class="btn-danger" onclick="App.openModal('advanced-cleanup')" style="width: 100%; font-weight: bold; background: #eab308; border-color: #ca8a04; color: #fff;">
+                <i class="ph ph-broom"></i> AVVIA PULIZIA STORAGE
+              </button>
+            </div>
+
+            <div style="background: #fff5f5; padding: 20px; border-radius: 12px; border: 2px solid #feb2b2;">
+              <h4 style="margin-bottom: 8px; color: #c53030;">2. Reset Dati HACCP</h4>
               <p style="font-size: 13px; color: #742a2a; margin-bottom: 12px;">Cancella Temperature, Sanificazioni, Igiene, Strutture e Non Conformit\u00e0.</p>
               <button class="btn-danger" onclick="App.clearHaccpData()" style="width: 100%; font-weight: bold;">
                 <i class="ph ph-clock-counter-clockwise"></i> CANCELLA TUTTI I LOG HACCP
@@ -3291,7 +3697,7 @@ const App = {
             </div>
 
             <div style="background: #fff5f5; padding: 20px; border-radius: 12px; border: 2px solid #feb2b2;">
-              <h4 style="margin-bottom: 8px; color: #c53030;">2. Reset Dati Tracciabilità</h4>
+              <h4 style="margin-bottom: 8px; color: #c53030;">3. Reset Dati Tracciabilità</h4>
               <p style="font-size: 13px; color: #742a2a; margin-bottom: 12px;">Cancella Ricettario, Carichi, Produzioni, Ingredienti e Fornitori.</p>
               <button class="btn-danger" onclick="App.clearTraceData()" style="width: 100%; font-weight: bold;">
                 <i class="ph ph-trash"></i> CANCELLA TUTTA LA TRACCIABILITÀ
@@ -3299,7 +3705,7 @@ const App = {
             </div>
 
             <div style="background: #742a2a; padding: 20px; border-radius: 12px; border: 2px solid #000;">
-              <h4 style="margin-bottom: 8px; color: #fff;">3. Reset di Fabbrica</h4>
+              <h4 style="margin-bottom: 8px; color: #fff;">4. Reset di Fabbrica</h4>
               <p style="font-size: 13px; color: #feb2b2; margin-bottom: 12px;">RIPRISTINO TOTALE: Cancella ogni dato e impostazione dell'app.</p>
               <button class="btn-primary" onclick="App.factoryReset()" style="background: #fff; color: #742a2a; width: 100%; font-weight: 900;">
                 <i class="ph ph-warning-circle"></i> RESET TOTALE DI FABBRICA
@@ -3360,7 +3766,9 @@ const App = {
         { id: 'haccp_pest', label: 'Infestanti' },
         { id: 'trace_incoming', label: 'Carico Merci' },
         { id: 'trace_production', label: 'Produzione' },
-        { id: 'trace_suppliers', label: 'Fornitori' }
+        { id: 'trace_suppliers', label: 'Fornitori' },
+        { id: 'trace_clients', label: 'Clienti' },
+        { id: 'trace_sales', label: 'Vendite (DDT)' }
       ];
 
       return `
@@ -3399,9 +3807,12 @@ const App = {
         'haccp_noncompliance': 'Non Conformit\u00e0',
         'haccp_structure': 'Ambienti',
         'haccp_maintenance': 'Manutenzione',
+        'haccp_pest': 'Controllo Infestanti',
         'trace_incoming': 'Carico Merci',
         'trace_production': 'Produzione',
-        'trace_suppliers': 'Fornitori'
+        'trace_suppliers': 'Fornitori',
+        'trace_clients': 'Clienti',
+        'trace_sales': 'Vendite (DDT)'
       };
 
       return `
@@ -4192,32 +4603,41 @@ const App = {
 
         if(!clientId || !date || !deliveryAddress) { alert("Inserisci tutti i campi obbligatori (*)."); return; }
 
-        const rows = document.querySelectorAll('.sale-item-row');
         const items = [];
         let valid = true;
-
-        rows.forEach(row => {
-          const select = row.querySelector('.sale-prod-select');
-          const qtyInput = row.querySelector('.sale-qty-input');
-          if (select && qtyInput) {
-            const prodId = select.value;
-            const quantity = parseFloat(qtyInput.value);
-            if (!prodId || isNaN(quantity) || quantity <= 0) {
+        let stockError = '';
+        document.querySelectorAll('.sale-item-row').forEach(row => {
+          const prodId = row.querySelector('.sale-prod').value;
+          const qtyStr = row.querySelector('.sale-qty').value;
+          if(prodId && qtyStr) {
+            const quantity = parseFloat(qtyStr.replace(',','.'));
+            if(isNaN(quantity) || quantity <= 0) {
               valid = false;
             } else {
-              const prod = (Store.data.productions || []).find(p => p.id === prodId);
-              if (prod) {
-                items.push({
-                  productId: prodId,
-                  productName: prod.recipeName,
-                  lot: prod.lot,
-                  expiry: prod.expiry,
-                  quantity: quantity
-                });
+              const prod = Store.data.productions.find(p => p.id === prodId);
+              if(prod) {
+                const currentStock = App.getProductionStock(prodId).stock;
+                if (quantity > currentStock) {
+                   valid = false;
+                   stockError = `Quantità non valida per ${prod.recipeName} (Lotto: ${prod.lot}). Giacenza disponibile: ${currentStock.toFixed(2)}`;
+                } else {
+                  items.push({
+                    productId: prodId,
+                    productName: prod.recipeName,
+                    lot: prod.lot,
+                    expiry: prod.expiry,
+                    quantity: quantity
+                  });
+                }
               }
             }
           }
         });
+
+        if (stockError) {
+          alert(stockError);
+          return;
+        }
 
         if(!valid || items.length === 0) {
           alert("Compila tutte le righe prodotto inserite con una quantità positiva.");
@@ -4236,8 +4656,7 @@ const App = {
         });
 
         this.closeModal();
-        this.renderView('trace_sales');
-        this.exportDDT(newSale.id);
+        this.goToSaleDetail(newSale.id);
       };
     }
 
@@ -4931,7 +5350,85 @@ const App = {
       };
     }
     
-    if (type === 'bulk-temp') {
+    if (type === 'advanced-cleanup') {
+      title.innerHTML = '<i class="ph-fill ph-broom"></i> Pulizia Memoria Avanzata';
+      body.innerHTML = `
+        <div style="background: rgba(234,179,8,0.1); border: 1px solid var(--warning-color); padding: 12px; border-radius: 8px; margin-bottom: 20px; font-size: 13px; color: #854d0e;">
+          <strong><i class="ph-fill ph-warning"></i> Attenzione:</strong> Questa operazione cancellerà in modo irreversibile le foto allegate ai registri selezionati. I dati testuali saranno conservati. I vecchi DDT verranno spostati nello Storico Leggero.
+        </div>
+        <div class="form-group" style="margin-bottom: 20px;">
+          <label style="font-weight: 700;">Seleziona periodo temporale:</label>
+          <select id="cleanup-period" style="width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--border-color); font-size: 14px;">
+            <option value="12">Record più vecchi di 1 Anno</option>
+            <option value="24" selected>Record più vecchi di 2 Anni</option>
+            <option value="36">Record più vecchi di 3 Anni</option>
+            <option value="60">Record più vecchi di 5 Anni</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label style="font-weight: 700; margin-bottom: 10px; display: block;">Seleziona i moduli da ripulire:</label>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+            <!-- Colonna HACCP -->
+            <div>
+              <h5 style="margin-bottom: 12px; color: var(--text-secondary); border-bottom: 1px solid var(--border-color); padding-bottom: 4px;"><i class="ph-fill ph-clipboard-text"></i> HACCP</h5>
+              <div style="display: flex; flex-direction: column; gap: 10px;">
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; line-height: 1.2;">
+                  <input type="checkbox" class="cleanup-module-cb" value="haccp_temperature" checked style="margin: 0; flex-shrink: 0; width: 16px; height: 16px;"> Temperature
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; line-height: 1.2;">
+                  <input type="checkbox" class="cleanup-module-cb" value="haccp_sanitation" checked style="margin: 0; flex-shrink: 0; width: 16px; height: 16px;"> Sanificazioni
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; line-height: 1.2;">
+                  <input type="checkbox" class="cleanup-module-cb" value="haccp_hygiene" checked style="margin: 0; flex-shrink: 0; width: 16px; height: 16px;"> Igiene
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; line-height: 1.2;">
+                  <input type="checkbox" class="cleanup-module-cb" value="haccp_structure" checked style="margin: 0; flex-shrink: 0; width: 16px; height: 16px;"> Strutture
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; line-height: 1.2;">
+                  <input type="checkbox" class="cleanup-module-cb" value="haccp_pest" checked style="margin: 0; flex-shrink: 0; width: 16px; height: 16px;"> Infestanti
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; line-height: 1.2;">
+                  <input type="checkbox" class="cleanup-module-cb" value="haccp_maintenance" checked style="margin: 0; flex-shrink: 0; width: 16px; height: 16px;"> Manutenzione
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; line-height: 1.2;">
+                  <input type="checkbox" class="cleanup-module-cb" value="haccp_noncompliance" checked style="margin: 0; flex-shrink: 0; width: 16px; height: 16px;"> Non Conformità
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; line-height: 1.2;">
+                  <input type="checkbox" class="cleanup-module-cb" value="worker_training" checked style="margin: 0; flex-shrink: 0; width: 16px; height: 16px;"> Formazione
+                </label>
+              </div>
+            </div>
+
+            <!-- Colonna Tracciabilità -->
+            <div>
+              <h5 style="margin-bottom: 12px; color: var(--primary-color); border-bottom: 1px solid var(--border-color); padding-bottom: 4px;"><i class="ph-fill ph-git-branch"></i> TRACCIABILITÀ</h5>
+              <div style="display: flex; flex-direction: column; gap: 10px;">
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; line-height: 1.2; font-weight: 600;">
+                  <input type="checkbox" class="cleanup-module-cb" value="incoming_goods" checked style="margin: 0; flex-shrink: 0; width: 16px; height: 16px;"> Carico Merci
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; line-height: 1.2; font-weight: 600;">
+                  <input type="checkbox" class="cleanup-module-cb" value="sales" checked style="margin: 0; flex-shrink: 0; width: 16px; height: 16px;"> Vendite
+                </label>
+                <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; line-height: 1.2; font-weight: 600;">
+                  <input type="checkbox" class="cleanup-module-cb" value="productions" checked style="margin: 0; flex-shrink: 0; width: 16px; height: 16px;"> Produzioni
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+      saveBtn.onclick = () => {
+        const period = document.getElementById('cleanup-period').value;
+        const checkboxes = document.querySelectorAll('.cleanup-module-cb:checked');
+        const modules = Array.from(checkboxes).map(cb => cb.value);
+        if (modules.length === 0) {
+          alert('Seleziona almeno un modulo da ripulire.');
+          return;
+        }
+        App.executeAdvancedCleanup(modules, parseInt(period));
+        App.closeModal();
+      };
+    } else if (type === 'bulk-temp') {
       title.innerHTML = '<i class="ph-fill ph-check-square"></i> Registra Tutte le Temperature';
       const equipments = Store.data.haccp_temp_equipments || [];
       const eligibleOperators = App.getEligibleOperators('temperature');
@@ -5517,19 +6014,57 @@ const App = {
 
         for (let block of ingredientBlocks) {
           const ingId = block.dataset.ingId;
-          const lotId = block.querySelector('.prod-lot-select').value;
-          const qty = block.dataset.neededQty;
+          const ingName = block.dataset.ingName;
+          const neededQty = parseFloat(block.dataset.neededQty);
           
-          if (!lotId) {
-            alert(`Seleziona il lotto per l'ingrediente: ${block.dataset.ingName}`);
+          let totalPicked = 0;
+          const lotRows = block.querySelectorAll('.lot-row');
+          
+          if (lotRows.length === 0) {
+            alert(`Nessun lotto selezionato per l'ingrediente: ${ingName}`);
             return;
           }
           
-          ingredientsUsed.push({
-            ingredientId: ingId,
-            incomingId: lotId, // Riferimento al carico specifico
-            quantity: qty
-          });
+          for (let row of lotRows) {
+            const lotId = row.querySelector('.prod-lot-select').value;
+            const qtyStr = row.querySelector('.prod-lot-qty').value;
+            const qty = parseFloat(qtyStr.replace(',','.'));
+            
+            if (!lotId || isNaN(qty) || qty <= 0) {
+              alert(`Seleziona un lotto e inserisci una quantità valida per l'ingrediente: ${ingName}`);
+              return;
+            }
+            
+            // Verifica giacenza
+            const goods = Store.data.incoming_goods || [];
+            const productions = Store.data.productions || [];
+            const g = goods.find(x => x.id === lotId);
+            if (g) {
+              const used = productions.reduce((acc, p) => {
+                const ingUsed = (p.ingredients || []).filter(i => i.incomingId === g.id);
+                return acc + ingUsed.reduce((sum, iu) => sum + parseFloat(iu.quantity), 0);
+              }, 0);
+              const adjustments = (g.adjustments || []).reduce((acc, a) => acc + (parseFloat(a.quantity) || 0), 0);
+              const availableQty = parseFloat(g.quantity) - used - adjustments;
+              if (qty > availableQty) {
+                alert(`Giacenza insufficiente per l'ingrediente ${ingName} (Lotto: ${g.lotInterno || 'N/D'}). Quantità richiesta: ${qty}, disponibile: ${availableQty.toFixed(2)}`);
+                return;
+              }
+            }
+            
+            totalPicked += qty;
+            ingredientsUsed.push({
+              ingredientId: ingId,
+              incomingId: lotId,
+              quantity: qty
+            });
+          }
+          
+          // Allow small float point difference (e.g. 0.001)
+          if (Math.abs(totalPicked - neededQty) > 0.005) {
+            alert(`La quantità totale prelevata per l'ingrediente ${ingName} (${totalPicked.toFixed(3)}) non corrisponde al fabbisogno richiesto (${neededQty.toFixed(3)}).`);
+            return;
+          }
         }
 
         Store.addItem('productions', {
@@ -5606,16 +6141,56 @@ const App = {
 
         for (let block of ingredientBlocks) {
           const ingId = block.dataset.ingId;
-          const lotId = block.querySelector('.prod-lot-select').value;
-          const qty = block.dataset.neededQty;
+          const ingName = block.dataset.ingName;
+          const neededQty = parseFloat(block.dataset.neededQty);
           
-          if (!lotId) { alert("Seleziona tutti i lotti."); return; }
+          let totalPicked = 0;
+          const lotRows = block.querySelectorAll('.lot-row');
           
-          ingredientsUsed.push({
-            ingredientId: ingId,
-            incomingId: lotId,
-            quantity: qty
-          });
+          if (lotRows.length === 0) {
+            alert(`Nessun lotto selezionato per l'ingrediente: ${ingName}`);
+            return;
+          }
+          
+          for (let row of lotRows) {
+            const lotId = row.querySelector('.prod-lot-select').value;
+            const qtyStr = row.querySelector('.prod-lot-qty').value;
+            const qty = parseFloat(qtyStr.replace(',','.'));
+            
+            if (!lotId || isNaN(qty) || qty <= 0) {
+              alert(`Seleziona un lotto e inserisci una quantità valida per l'ingrediente: ${ingName}`);
+              return;
+            }
+            
+            const goods = Store.data.incoming_goods || [];
+            const productions = Store.data.productions || [];
+            const g = goods.find(x => x.id === lotId);
+            if (g) {
+              const used = productions.reduce((acc, p) => {
+                if (p.id === recId) return acc; // ignora la corrente
+                const ingUsed = (p.ingredients || []).filter(i => i.incomingId === g.id);
+                return acc + ingUsed.reduce((sum, iu) => sum + parseFloat(iu.quantity), 0);
+              }, 0);
+              const adjustments = (g.adjustments || []).reduce((acc, a) => acc + (parseFloat(a.quantity) || 0), 0);
+              const availableQty = parseFloat(g.quantity) - used - adjustments;
+              if (qty > availableQty) {
+                alert(`Giacenza insufficiente per l'ingrediente ${ingName} (Lotto: ${g.lotInterno || 'N/D'}). Quantità richiesta: ${qty}, disponibile extra: ${availableQty.toFixed(2)}`);
+                return;
+              }
+            }
+            
+            totalPicked += qty;
+            ingredientsUsed.push({
+              ingredientId: ingId,
+              incomingId: lotId,
+              quantity: qty
+            });
+          }
+          
+          if (Math.abs(totalPicked - neededQty) > 0.005) {
+            alert(`La quantità totale prelevata per l'ingrediente ${ingName} (${totalPicked.toFixed(3)}) non corrisponde al fabbisogno richiesto (${neededQty.toFixed(3)}).`);
+            return;
+          }
         }
 
         Store.updateItem('productions', recId, {
@@ -6837,9 +7412,20 @@ const App = {
           .operator-footer { margin-top: 14px; padding: 10px 12px; background: #f8fafc; border-radius: 8px; border: 1px solid #e2e8f0; }
           .operator-footer .label-op { font-size: 10px; color: #9ca3af; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px; }
           .operator-footer .name { font-size: 13px; font-weight: 800; color: #0f172a; margin-top: 2px; }
-          @media print { body { background: white; } .label { box-shadow: none; } }
+          .no-print-bar { position: fixed; top: 0; left: 0; right: 0; background: #0f172a; padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; z-index: 1000; box-shadow: 0 2px 10px rgba(0,0,0,0.2); }
+          .no-print-bar button { padding: 8px 16px; border: none; border-radius: 6px; font-weight: 700; cursor: pointer; font-size: 14px; transition: all 0.2s; }
+          .btn-close { background: #ef4444; color: white; }
+          .btn-close:hover { background: #dc2626; }
+          .btn-print { background: #10b981; color: white; }
+          .btn-print:hover { background: #059669; }
+          body { padding-top: 60px; } /* per non sovrapporre l'etichetta alla barra */
+          @media print { body { background: white; padding-top: 0; display: block; } .label { box-shadow: none; margin: 0 auto; } .no-print-bar { display: none !important; } }
         </style>
       </head><body>
+        <div class="no-print-bar">
+          <button class="btn-close" onclick="window.close(); window.location.href='${baseUrl}';">✖ Chiudi e Torna all'App</button>
+          <button class="btn-print" onclick="window.print();">🖨️ Stampa di Nuovo</button>
+        </div>
         <div class="label">
           <div class="badge">&#128203; uso interno laboratorio</div>
           <div class="title">${prod.recipeName}</div>
@@ -7018,6 +7604,76 @@ const App = {
       feedback.innerHTML = '<span class="text-non-conforme">NON CONFORME</span>';
       corr.style.display = 'block';
     }
+  },
+
+  getProductionStock(productionId) {
+    const p = (Store.data.productions || []).find(x => x.id === productionId);
+    if (!p) return { produced: 0, sold: 0, administered: 0, stock: 0 };
+    
+    const produced = parseFloat(p.quantityProduced) || 0;
+    const administered = parseFloat(p.quantityAdministered) || 0;
+    
+    let sold = 0;
+    (Store.data.sales || []).forEach(s => {
+      (s.items || []).forEach(item => {
+        if (item.productId === productionId) {
+          sold += parseFloat(item.quantity) || 0;
+        }
+      });
+    });
+    
+    return { produced, sold, administered, stock: produced - sold - administered };
+  },
+
+  applyLightDDTFilters() {
+    const clientId = document.getElementById('filter-light-client')?.value || '';
+    const dateFrom = document.getElementById('filter-light-date-from')?.value || '';
+    const dateTo = document.getElementById('filter-light-date-to')?.value || '';
+    const searchText = (document.getElementById('filter-light-text')?.value || '').toLowerCase();
+    
+    const items = document.querySelectorAll('.light-ddt-item');
+    let visibleCount = 0;
+    
+    items.forEach(item => {
+       const itemClient = item.getAttribute('data-client');
+       const itemDate = item.getAttribute('data-date');
+       const itemSearch = item.getAttribute('data-search');
+       
+       let match = true;
+       if (clientId && itemClient !== clientId) match = false;
+       if (dateFrom && itemDate < dateFrom) match = false;
+       if (dateTo && itemDate > dateTo) match = false;
+       if (searchText && !itemSearch.includes(searchText)) match = false;
+       
+       if (match) {
+         item.style.display = 'block';
+         visibleCount++;
+       } else {
+         item.style.display = 'none';
+       }
+    });
+  },
+
+  updateAdministeredQty(id, qty) {
+    const val = parseFloat(qty) || 0;
+    if (val < 0) {
+       alert("La quantità non può essere negativa.");
+       return;
+    }
+    
+    const p = Store.data.productions.find(x => x.id === id);
+    if (!p) return;
+    
+    const sold = App.getProductionStock(id).sold;
+    const maxAllowed = parseFloat(p.quantityProduced || p.quantity) - sold;
+    
+    if (val > maxAllowed) {
+       alert(`Quantità non valida! La giacenza massima somministrabile è ${maxAllowed.toFixed(2)}.`);
+       return;
+    }
+
+    Store.updateItem('productions', id, { quantityAdministered: val });
+    this.renderView('trace_production_detail');
   },
 
   formatDate(isoString) {
@@ -8079,6 +8735,72 @@ const App = {
       doc.autoTable({ startY: 45, head: [head], body: body, theme: 'grid', styles: { fontSize: 8 } });
       doc.save(`report_produzione_${today.replace(/\//g,'-')}.pdf`);
       
+    } else if (type === 'clients') {
+      let modelText = modelConfigs['trace_clients']?.model || 'MOD-CLI Rev.0';
+      this.addStandardPDFHeader(doc, `Anagrafica Clienti`, modelText);
+      
+      const clients = Store.data.clients || [];
+      const body = clients.length > 0 ? clients.map(c => [
+        c.name,
+        c.vat || '-',
+        c.legalAddress || '-',
+        c.officeAddress || '-',
+        c.phone || '-'
+      ]) : [['', '', '', '', '']];
+      
+      doc.autoTable({
+        startY: 45,
+        head: [['CLIENTE', 'P.IVA / CF', 'SEDE LEGALE', 'SEDE OPERATIVA', 'TELEFONO']],
+        body: body,
+        theme: 'grid'
+      });
+      doc.save(`report_clienti_${today.replace(/\//g,'-')}.pdf`);
+
+    } else if (type === 'sales') {
+      let modelText = modelConfigs['trace_sales']?.model || 'MOD-VEN Rev.0';
+      this.addStandardPDFHeader(doc, `Registro Vendite`, modelText);
+      
+      const sales = Store.data.sales || [];
+      const clients = Store.data.clients || [];
+      
+      let body = [];
+      if (sales.length > 0) {
+        sales.sort((a,b) => new Date(b.date) - new Date(a.date)).forEach(s => {
+          const client = clients.find(c => c.id === s.clientId) || {};
+          if (s.items && s.items.length > 0) {
+            s.items.forEach(item => {
+              body.push([
+                this.formatDate(s.date),
+                client.name || 'Sconosciuto',
+                client.vat || '-',
+                item.productName || '-',
+                item.lot || '-',
+                item.quantity || '-'
+              ]);
+            });
+          } else {
+             body.push([
+                this.formatDate(s.date),
+                client.name || 'Sconosciuto',
+                client.vat || '-',
+                '-',
+                '-',
+                '-'
+             ]);
+          }
+        });
+      } else {
+        body = [['', '', '', '', '', '']];
+      }
+      
+      doc.autoTable({
+        startY: 45,
+        head: [['DATA', 'CLIENTE', 'P.IVA', 'PRODUZIONE', 'LOTTO', 'QUANTITA\'']],
+        body: body,
+        theme: 'grid'
+      });
+      doc.save(`report_vendite_${today.replace(/\//g,'-')}.pdf`);
+
     } else if (type === 'ingredients') {
       let modelText = modelConfigs['trace_ingredients']?.model || 'MOD-ING Rev.0';
       this.addStandardPDFHeader(doc, `Anagrafica Ingredienti Generici`, modelText);
@@ -8237,6 +8959,369 @@ const App = {
     doc.line(doc.internal.pageSize.width - 80, finalY + 12, doc.internal.pageSize.width - 14, finalY + 12);
     
     doc.save(`ddt_${sale.ddtNumber}.pdf`);
+  },
+
+  async downloadExcelTemplate(module) {
+    if (typeof ExcelJS === 'undefined') {
+      alert("Libreria ExcelJS non caricata. Ricarica la pagina o controlla la connessione.");
+      return;
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Template');
+    let ws_name = "";
+
+    if (module === 'ingredients') {
+      ws_name = "Ingredienti";
+      worksheet.columns = [
+        { header: "Nome Ingrediente", key: "name", width: 25 },
+        { header: "Unita di Misura", key: "unit", width: 18 },
+        { header: "Flag Allergene (Si/No)", key: "flag", width: 25 },
+        { header: "Tipo Allergene", key: "type", width: 35 }
+      ];
+      
+      worksheet.addRow({ name: "Esempio: Farina 00", unit: "kg", flag: "Si", type: "Cereali (Glutine)" });
+      worksheet.addRow({ name: "Esempio: Sale", unit: "kg", flag: "No", type: "" });
+
+      const units = '"kg,g,L,ml,pz"';
+      const flags = '"Si,No"';
+      const allergeniList = '"Cereali (Glutine),Crostacei,Uova,Pesce,Arachidi,Soia,Latte,Frutta a guscio,Sedano,Senape,Sesamo,Solfiti,Lupini,Molluschi"';
+
+      for (let i = 2; i <= 1000; i++) {
+        worksheet.getCell(`B${i}`).dataValidation = {
+          type: 'list',
+          allowBlank: true,
+          formulae: [units]
+        };
+        worksheet.getCell(`C${i}`).dataValidation = {
+          type: 'list',
+          allowBlank: true,
+          formulae: [flags]
+        };
+        worksheet.getCell(`D${i}`).dataValidation = {
+          type: 'list',
+          allowBlank: true,
+          formulae: [allergeniList],
+          showErrorMessage: false,
+          promptTitle: 'Allergeni',
+          prompt: 'Scegli dalla tendina o scrivi a mano separando con virgola (es. Uova, Latte)',
+          showInputMessage: true
+        };
+      }
+    } else if (module === 'suppliers') {
+      ws_name = "Fornitori";
+      worksheet.columns = [
+        { header: "Ragione Sociale", key: "name", width: 25 },
+        { header: "Partita IVA", key: "vat", width: 15 },
+        { header: "Sede Legale", key: "legal", width: 25 },
+        { header: "Sede Operativa", key: "office", width: 25 },
+        { header: "PEC", key: "pec", width: 20 },
+        { header: "Responsabile Azienda", key: "manager", width: 20 },
+        { header: "Telefono", key: "phone", width: 15 },
+        { header: "Email", key: "email", width: 20 }
+      ];
+      worksheet.addRow({ name: "Rossi S.r.l.", vat: "01234567890", legal: "Via Roma 1, Milano", office: "Via Roma 1, Milano", pec: "rossi@pec.it", manager: "Mario Rossi", phone: "02123456", email: "info@rossi.it" });
+    } else if (module === 'clients') {
+      ws_name = "Clienti";
+      worksheet.columns = [
+        { header: "Ragione Sociale", key: "name", width: 25 },
+        { header: "Partita IVA", key: "vat", width: 15 },
+        { header: "Sede Legale", key: "legal", width: 25 },
+        { header: "Sede Operativa", key: "office", width: 25 },
+        { header: "Telefono", key: "phone", width: 15 },
+        { header: "Email", key: "email", width: 20 }
+      ];
+      worksheet.addRow({ name: "Ristorante Da Mario", vat: "09876543210", legal: "Via Napoli 2, Roma", office: "Via Napoli 2, Roma", phone: "06123456", email: "info@damario.it" });
+    } else if (module === 'recipes') {
+      ws_name = "Ricettario";
+      let cols = [
+        { header: "Nome Ricetta", key: "name", width: 20 },
+        { header: "Peso Totale (kg/pz)", key: "weight", width: 20 },
+        { header: "Procedura/Note", key: "proc", width: 30 }
+      ];
+      for(let i=1; i<=10; i++) {
+        cols.push({ header: `Ingrediente ${i}`, key: `ing${i}`, width: 25 });
+        cols.push({ header: `Quantita ${i}`, key: `qty${i}`, width: 15 });
+      }
+      worksheet.columns = cols;
+      worksheet.addRow({ name: "Torta di Mele", weight: "1", proc: "Infornare a 180 gradi per 40 min", ing1: "Farina 00", qty1: "0.3", ing2: "Zucchero", qty2: "0.2", ing3: "Mele", qty3: "0.5" });
+    }
+
+    worksheet.getRow(1).font = { bold: true };
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `Template_${ws_name}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  },
+
+  triggerExcelImport(module) {
+    const input = document.getElementById('excel-import-input');
+    if (!input) return;
+    input.dataset.module = module;
+    input.click();
+  },
+
+  handleExcelImport(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const module = event.target.dataset.module;
+    const reader = new FileReader();
+    
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const json = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+        
+        let records = json;
+        if(records.length > 0 && records[0]["Nome Ingrediente"] && records[0]["Nome Ingrediente"].startsWith("Esempio:")) {
+          records = records.slice(2); // The example has 2 rows
+        } else if(records.length > 0 && records[0]["Ragione Sociale"] && records[0]["Ragione Sociale"] === "Rossi S.r.l.") {
+          records = records.slice(1);
+        } else if(records.length > 0 && records[0]["Ragione Sociale"] && records[0]["Ragione Sociale"] === "Ristorante Da Mario") {
+          records = records.slice(1);
+        } else if(records.length > 0 && records[0]["Nome Ricetta"] && records[0]["Nome Ricetta"] === "Torta di Mele") {
+          records = records.slice(1); // The example has 1 row
+        }
+
+        if (module === 'ingredients') {
+          this.importIngredients(records);
+        } else if (module === 'suppliers') {
+          this.importSuppliers(records);
+        } else if (module === 'clients') {
+          this.importClients(records);
+        } else if (module === 'recipes') {
+          this.importRecipes(records);
+        }
+      } catch(err) {
+        console.error(err);
+        alert("Errore durante la lettura del file Excel.");
+      }
+      // Reset input
+      event.target.value = '';
+    };
+    
+    reader.readAsArrayBuffer(file);
+  },
+
+  importIngredients(records) {
+    let successCount = 0;
+    let skipCount = 0;
+    const dbIngredients = Store.data.ingredients || [];
+
+    for (let i = 0; i < records.length; i++) {
+      const row = records[i];
+      const name = row["Nome Ingrediente"];
+      if(!name) continue; // skip completely empty rows
+
+      const nameClean = name.toString().trim();
+      const exists = dbIngredients.some(item => item.name.toLowerCase() === nameClean.toLowerCase());
+      if (exists) {
+        skipCount++;
+        continue;
+      }
+
+      const unit = row["Unita di Misura"] || "kg";
+      const isAllergenText = (row["Flag Allergene (Si/No)"] || "").toString().trim().toLowerCase();
+      const allergenPresent = (isAllergenText === "si" || isAllergenText === "sì" || isAllergenText === "yes" || isAllergenText === "1");
+      const allergenType = row["Tipo Allergene"];
+      
+      let allergensArray = [];
+      if (allergenPresent && allergenType) {
+        allergensArray = allergenType.split(',').map(s => s.trim()).filter(s => s);
+      }
+
+      Store.addItem('ingredients', {
+        name: nameClean,
+        unit: unit.trim(),
+        allergenPresent: allergenPresent,
+        allergens: allergensArray
+      });
+      successCount++;
+    }
+    let msg = `Importazione completata: ${successCount} ingredienti salvati.`;
+    if (skipCount > 0) msg += `\n${skipCount} ingredienti sono stati saltati perché già presenti in anagrafica.`;
+    alert(msg);
+    this.renderView('trace_ingredients');
+  },
+
+  importSuppliers(records) {
+    let successCount = 0;
+    let skipCount = 0;
+    const dbSuppliers = Store.data.suppliers || [];
+
+    for (let i = 0; i < records.length; i++) {
+      const row = records[i];
+      const name = row["Ragione Sociale"];
+      if(!name) continue; // skip completely empty rows
+
+      const vat = row["Partita IVA"];
+      if (!vat) {
+        alert(`Errore riga ${i+2}: La Partita IVA è obbligatoria per il fornitore "${name}".`);
+        return;
+      }
+
+      const vatClean = vat.toString().trim();
+      const exists = dbSuppliers.some(item => item.vat === vatClean);
+      if (exists) {
+        skipCount++;
+        continue;
+      }
+
+      const legal = row["Sede Legale"];
+      const office = row["Sede Operativa"];
+      const pec = row["PEC"] || "";
+      const manager = row["Responsabile Azienda"] || "";
+      const phone = row["Telefono"] || "";
+      const email = row["Email"] || "";
+
+      if (!legal || !office) {
+        alert(`Errore riga ${i+2}: Sede Legale e Operativa sono obbligatori per il fornitore "${name}".`);
+        return;
+      }
+
+      Store.addItem('suppliers', {
+        name: name.trim(),
+        vat: vatClean,
+        legalAddress: legal.trim(),
+        officeAddress: office.trim(),
+        pec: pec.trim(),
+        manager: manager.trim(),
+        phone: phone.toString().trim(),
+        email: email.trim(),
+        inactive: false,
+        suppliedIngredients: []
+      });
+      successCount++;
+    }
+    let msg = `Importazione completata: ${successCount} fornitori salvati.`;
+    if (skipCount > 0) msg += `\n${skipCount} fornitori sono stati saltati perché la Partita IVA è già presente a sistema.`;
+    alert(msg);
+    this.renderView('trace_suppliers');
+  },
+
+  importClients(records) {
+    let successCount = 0;
+    let skipCount = 0;
+    const dbClients = Store.data.clients || [];
+
+    for (let i = 0; i < records.length; i++) {
+      const row = records[i];
+      const name = row["Ragione Sociale"];
+      if(!name) continue;
+
+      const vat = row["Partita IVA"];
+      if (!vat) {
+        alert(`Errore riga ${i+2}: La Partita IVA è obbligatoria per il cliente "${name}".`);
+        return;
+      }
+
+      const vatClean = vat.toString().trim();
+      const exists = dbClients.some(item => item.vat === vatClean);
+      if (exists) {
+        skipCount++;
+        continue;
+      }
+
+      const legal = row["Sede Legale"];
+      const office = row["Sede Operativa"];
+      const phone = row["Telefono"] || "";
+      const email = row["Email"] || "";
+
+      if (!legal || !office) {
+        alert(`Errore riga ${i+2}: Sede Legale e Operativa sono obbligatori per il cliente "${name}".`);
+        return;
+      }
+
+      Store.addItem('clients', {
+        name: name.trim(),
+        vat: vatClean,
+        legalAddress: legal.trim(),
+        officeAddress: office.trim(),
+        phone: phone.toString().trim(),
+        email: email.trim()
+      });
+      successCount++;
+    }
+    let msg = `Importazione completata: ${successCount} clienti salvati.`;
+    if (skipCount > 0) msg += `\n${skipCount} clienti sono stati saltati perché la Partita IVA è già presente a sistema.`;
+    alert(msg);
+    this.renderView('trace_clients');
+  },
+
+  importRecipes(records) {
+    const dbIngredients = Store.data.ingredients || [];
+    const dbRecipes = Store.data.recipes || [];
+    let successCount = 0;
+    let skipCount = 0;
+
+    for (let i = 0; i < records.length; i++) {
+      const row = records[i];
+      const recipeName = row["Nome Ricetta"];
+      if(!recipeName) continue;
+
+      const recipeNameClean = recipeName.toString().trim();
+      const exists = dbRecipes.some(item => item.name.toLowerCase() === recipeNameClean.toLowerCase());
+      if (exists) {
+        skipCount++;
+        continue;
+      }
+
+      const totalWeight = row["Peso Totale (kg/pz)"] || 1;
+      const procedure = row["Procedura/Note"] || "";
+      
+      const ingredientsList = [];
+      
+      // Controlla fino a 20 ingredienti teorici (le colonne sono denominate "Ingrediente X" e "Quantita X")
+      for(let j=1; j<=20; j++) {
+        const ingName = row[`Ingrediente ${j}`];
+        const quantity = row[`Quantita ${j}`];
+        
+        if(ingName && quantity) {
+          const ingNameClean = ingName.toString().trim().toLowerCase();
+          const foundIng = dbIngredients.find(dbI => dbI.name.toLowerCase() === ingNameClean);
+          
+          if (!foundIng) {
+            alert(`Errore riga ${i+2}: Ingrediente "${ingName}" non trovato nell'anagrafica. Aggiungilo prima in Ingredienti Generici. (Ricetta bloccata: ${recipeName})`);
+            return;
+          }
+          
+          ingredientsList.push({
+            ingredientId: foundIng.id,
+            quantity: quantity
+          });
+        }
+      }
+
+      if(ingredientsList.length === 0) {
+        alert(`Errore riga ${i+2}: Devi inserire almeno un ingrediente per la ricetta "${recipeName}". Usa le colonne Ingrediente 1 e Quantita 1.`);
+        return;
+      }
+
+      Store.addItem('recipes', {
+        name: recipeNameClean,
+        totalWeight: totalWeight,
+        procedure: procedure.toString().trim(),
+        ingredients: ingredientsList
+      });
+      
+      // Aggiungo localmente la ricetta appena inserita all'array dbRecipes per evitare duplicati all'interno dello stesso file Excel
+      dbRecipes.push({ name: recipeNameClean });
+      
+      successCount++;
+    }
+
+    let msg = `Importazione completata: ${successCount} ricette salvate.`;
+    if (skipCount > 0) msg += `\n${skipCount} ricette sono state saltate perché il nome è già presente nel ricettario.`;
+    alert(msg);
+    this.renderView('trace_recipes');
   }
 };
 

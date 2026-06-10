@@ -153,7 +153,8 @@ const Store = {
       // Produzioni completate
     ],
     clients: [],
-    sales: []
+    sales: [],
+    light_ddt_history: []
   },
 
   init() {
@@ -209,7 +210,7 @@ const Store = {
           'haccp_temp_equipments', 'workers', 'equipments', 
           'work_environments', 'detergents', 'suppliers', 
           'ingredients', 'incoming_goods', 'trace_shipments', 'recipes', 'productions',
-          'clients', 'sales'
+          'clients', 'sales', 'light_ddt_history'
         ];
         
         tables.forEach(table => {

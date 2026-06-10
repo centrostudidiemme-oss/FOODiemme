@@ -11,6 +11,10 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
   <!-- QRCode.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- SheetJS per esportazione/importazione Excel -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <!-- ExcelJS per creazione template con menu a tendina -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.3.0/exceljs.min.js"></script>
 </head>
 <body>
 
@@ -80,5 +84,7 @@
 <script src="sync.js?v=1"></script>
 <script src="store.js?v=5"></script>
 <script src="app_v4.js?v=5"></script>
+<!-- Hidden input for excel import -->
+<input type="file" id="excel-import-input" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel" style="display:none;" onchange="App.handleExcelImport(event)">
 </body>
 </html>
